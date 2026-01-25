@@ -1,0 +1,100 @@
+# ===========================================
+# Environment & Secrets (NEVER commit these!)
+# ===========================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ===========================================
+# Python
+# ===========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# ===========================================
+# IDE & Editors
+# ===========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# ===========================================
+# Testing & Coverage
+# ===========================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+
+# ===========================================
+# Logs & Debug
+# ===========================================
+*.log
+logs/
+debug/
+
+# ===========================================
+# OS Generated
+# ===========================================
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===========================================
+# Project Specific
+# ===========================================
+# Audio/video files from testing
+*.wav
+*.mp3
+*.mp4
+*.webm
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Playwright browser data
+playwright/.cache/
+
+# Meeting recordings (if any)
+recordings/

@@ -1,0 +1,43 @@
+# Real-Time AI Meeting Assistant - Dependencies
+
+# Core async framework
+asyncio-mqtt>=0.16.0
+aiohttp>=3.9.0
+
+# LLM Integration
+openai>=1.12.0
+anthropic>=0.18.0
+tiktoken>=0.5.0
+
+# Speech-to-Text
+deepgram-sdk>=3.0.0
+google-cloud-speech>=2.21.0
+azure-cognitiveservices-speech>=1.35.0
+
+# Meeting Platform SDKs
+google-auth>=2.27.0
+google-auth-oauthlib>=1.2.0
+msal>=1.26.0
+# zoom-python-sdk  # Install separately if needed
+
+# Audio Processing
+# pyaudio>=0.2.14  # Requires PortAudio - install separately if needed
+# webrtcvad>=2.0.10  # Requires C++ Build Tools - optional for VAD
+sounddevice>=0.4.6
+numpy>=1.26.0
+
+# Data Processing
+pydantic>=2.5.0
+python-dateutil>=2.8.0
+
+# Utilities
+python-dotenv>=1.0.0
+structlog>=24.1.0
+tenacity>=8.2.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# WebSocket Support
+websockets>=12.0
