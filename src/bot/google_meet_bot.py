@@ -1,17 +1,24 @@
 """
 Google Meet Bot implementation.
 
-This bot joins Google Meet meetings using browser automation (Puppeteer/Playwright)
+This bot joins Google Meet meetings using browser automation (Playwright)
 to capture audio and interact with the meeting chat.
 
-IMPORTANT: This is a simplified implementation. Production use requires:
-1. A Google Workspace account with bot permissions
-2. Proper OAuth2 authentication
-3. Compliance with Google's Terms of Service
+APPROACH: Uses a persistent browser profile so you only need to sign in ONCE.
+After the first sign-in, the bot remembers your session and can join meetings
+automatically without any manual intervention.
+
+FIRST-TIME SETUP:
+1. Run the bot once - a browser will open
+2. Sign in to your Google account manually
+3. Close the browser (or let the bot close it)
+4. Future runs will use the saved session - no sign-in needed!
 """
 
 import asyncio
+import os
 from typing import Optional
+from pathlib import Path
 import structlog
 
 from src.bot.base_bot import BaseMeetingBot, BotState, MeetingPlatform
@@ -19,24 +26,26 @@ from src.config import config
 
 logger = structlog.get_logger()
 
+# Persistent browser data directory - stores cookies/session
+BROWSER_DATA_DIR = Path(__file__).parent.parent.parent / ".browser_data"
+
 
 class GoogleMeetBot(BaseMeetingBot):
     """
     Bot for joining Google Meet meetings.
     
-    Uses browser automation to:
-    - Join meetings as a participant
+    Uses browser automation with PERSISTENT PROFILE to:
+    - Join meetings as a participant (no repeated sign-in)
     - Capture audio stream
     - Read and send chat messages
     
-    Requirements:
-    - Puppeteer or Playwright installed
-    - Google account credentials
-    - Chrome/Chromium browser
+    The browser profile is saved to .browser_data/ folder.
+    Sign in once, and the bot remembers your session forever.
     """
     
     def __init__(self, bot_name: str = None):
         super().__init__(bot_name or config.bot.name)
+        self._playwright = None
         self._browser = None
         self._page = None
         self._audio_capture_task = None
@@ -46,9 +55,15 @@ class GoogleMeetBot(BaseMeetingBot):
     def platform(self) -> MeetingPlatform:
         return MeetingPlatform.GOOGLE_MEET
     
+    def get_page(self):
+        """Return the Playwright page object for caption scraping."""
+        return self._page
+    
     async def join(self, meeting_url: str) -> bool:
         """
         Join a Google Meet meeting.
+        
+        Uses a PERSISTENT browser profile - sign in once, join forever.
         
         Args:
             meeting_url: Google Meet URL (e.g., https://meet.google.com/xxx-xxxx-xxx)
@@ -60,35 +75,57 @@ class GoogleMeetBot(BaseMeetingBot):
         self.meeting_url = meeting_url
         
         try:
-            # Launch browser with Playwright
             from playwright.async_api import async_playwright
             
-            playwright = await async_playwright().start()
+            self._playwright = await async_playwright().start()
             
-            # Launch browser with specific flags for audio capture
-            self._browser = await playwright.chromium.launch(
-                headless=False,  # Set True for production
+            # Ensure browser data directory exists
+            BROWSER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            
+            # Use PERSISTENT context - this saves cookies, localStorage, session!
+            # After signing in once, you never need to sign in again.
+            logger.info("launching_browser", 
+                       profile_dir=str(BROWSER_DATA_DIR),
+                       hint="First run? Sign in to Google when browser opens. Future runs will be automatic!")
+            
+            # Launch Chromium with persistent context
+            # Google Meet needs a real browser (WebRTC doesn't work headless)
+            # but we minimize the window so it stays out of your way.
+            self._browser = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(BROWSER_DATA_DIR),
+                headless=False,  # Required — Google Meet blocks headless
+                channel="chrome",
                 args=[
                     '--use-fake-ui-for-media-stream',
-                    '--use-fake-device-for-media-stream',
-                    '--disable-web-security',
-                    '--allow-running-insecure-content',
-                ]
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--window-size=800,600',      # Small window
+                    '--window-position=10000,0',   # Move off-screen initially
+                ],
+                ignore_default_args=['--enable-automation'],
             )
             
-            # Create a new page/context
-            context = await self._browser.new_context(
-                permissions=['microphone', 'camera'],
-                user_agent=f'{self.bot_name} Meeting Bot'
-            )
-            self._page = await context.new_page()
+            # Get the page (persistent context already has one)
+            self._page = self._browser.pages[0] if self._browser.pages else await self._browser.new_page()
             
             # Navigate to Google Meet
             logger.info("navigating_to_meet", url=meeting_url)
-            await self._page.goto(meeting_url)
+            await self._page.goto(meeting_url, wait_until='networkidle')
             
             # Wait for page to load
             await asyncio.sleep(3)
+            
+            # Wait a bit more for page to fully load
+            await asyncio.sleep(2)
+            
+            # Check if we're on the Google sign-in page (not Meet page)
+            needs_signin = await self._check_needs_signin()
+            if needs_signin:
+                logger.warning("google_signin_required",
+                             message="Please sign in to Google in the browser window.",
+                             hint="This is a ONE-TIME setup. After signing in, close this message and the bot will remember your session.")
+                # Wait for user to sign in (up to 5 minutes)
+                await self._wait_for_signin(timeout=300)
             
             # Turn off camera and microphone before joining
             await self._disable_media()
@@ -104,6 +141,20 @@ class GoogleMeetBot(BaseMeetingBot):
             
             if joined:
                 self._set_state(BotState.IN_MEETING)
+                logger.info("successfully_joined_meeting", url=meeting_url)
+                # Minimize the browser window — bot runs silently in background
+                try:
+                    cdp = await self._page.context.new_cdp_session(self._page)
+                    await cdp.send('Browser.getWindowForTarget')
+                    window = await cdp.send('Browser.getWindowForTarget')
+                    await cdp.send('Browser.setWindowBounds', {
+                        'windowId': window['windowId'],
+                        'bounds': {'windowState': 'minimized'}
+                    })
+                    print("🔽 Browser minimized — bot running in background")
+                except Exception:
+                    # Fallback: just log that we couldn't minimize
+                    print("💡 Tip: You can manually minimize the Chrome window")
                 # Start monitoring chat
                 self._chat_monitor_task = asyncio.create_task(self._monitor_chat())
                 return True
@@ -113,13 +164,68 @@ class GoogleMeetBot(BaseMeetingBot):
                 
         except ImportError:
             logger.error("playwright_not_installed", 
-                        hint="Run: pip install playwright && playwright install")
+                        hint="Run: pip install playwright && playwright install chromium")
             self._set_state(BotState.ERROR)
             return False
         except Exception as e:
             logger.error("meet_join_failed", error=str(e))
             self._set_state(BotState.ERROR)
             return False
+    
+    async def _check_needs_signin(self) -> bool:
+        """Check if we need to sign in to Google (actually on login page, not just seeing 'Sign in' button)."""
+        try:
+            current_url = self._page.url
+            
+            # If we're on accounts.google.com, we definitely need to sign in
+            if 'accounts.google.com' in current_url:
+                return True
+            
+            # If we're on meet.google.com, check if it's asking to sign in
+            # Look for the actual sign-in page elements, not just a "Sign in" link
+            if 'meet.google.com' in current_url:
+                # Check for "Your name" input - this means we can join without signing in
+                name_input = await self._page.query_selector('input[aria-label="Your name"]')
+                if name_input:
+                    return False  # We can join as guest
+                
+                # Check for join buttons - if they exist, we're already signed in
+                join_button = await self._page.query_selector('[aria-label="Join now"], [aria-label="Ask to join"]')
+                if join_button:
+                    return False  # Already signed in or can join
+                
+                # Check for camera/mic toggle - means we're on the pre-join screen
+                media_toggle = await self._page.query_selector('[aria-label*="camera" i], [aria-label*="microphone" i]')
+                if media_toggle:
+                    return False  # On pre-join screen, good to go
+            
+            # Check for explicit sign-in page elements
+            email_input = await self._page.query_selector('input[type="email"][name="identifier"]')
+            if email_input:
+                return True  # On Google sign-in page
+            
+            return False
+        except:
+            return False
+    
+    async def _wait_for_signin(self, timeout: int = 300):
+        """Wait for user to complete Google sign-in."""
+        logger.info("waiting_for_signin", timeout_seconds=timeout)
+        
+        for i in range(timeout):
+            # Check if we're now on the meeting page (sign-in complete)
+            needs_signin = await self._check_needs_signin()
+            if not needs_signin:
+                logger.info("signin_complete", message="Google sign-in successful! Session saved for future runs.")
+                await asyncio.sleep(2)  # Let page settle
+                return
+            
+            if i % 30 == 0 and i > 0:
+                logger.info("still_waiting_for_signin", elapsed_seconds=i)
+            
+            await asyncio.sleep(1)
+        
+        raise Exception("Sign-in timeout - please sign in faster next time!")
     
     async def leave(self):
         """Leave the Google Meet meeting."""
@@ -141,12 +247,16 @@ class GoogleMeetBot(BaseMeetingBot):
                 except:
                     pass
             
-            # Close browser
+            # Close browser context (this saves the session!)
             if self._browser:
                 await self._browser.close()
             
+            # Stop playwright
+            if self._playwright:
+                await self._playwright.stop()
+            
             self._set_state(BotState.DISCONNECTED)
-            logger.info("left_meeting")
+            logger.info("left_meeting", message="Session saved - no sign-in needed next time!")
             
         except Exception as e:
             logger.error("leave_meeting_error", error=str(e))

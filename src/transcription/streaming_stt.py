@@ -84,6 +84,7 @@ class DeepgramSTTService(BaseSTTService):
             self._client = DeepgramClient(self._api_key)
             
             # Configure live transcription options
+            # IMPORTANT: Must match the audio format we're sending!
             options = LiveOptions(
                 model="nova-2",
                 language="en",
@@ -93,6 +94,10 @@ class DeepgramSTTService(BaseSTTService):
                 interim_results=True,
                 utterance_end_ms=1000,
                 vad_events=True,
+                # Audio format settings - must match what we capture!
+                encoding="linear16",  # 16-bit PCM
+                sample_rate=16000,    # We resample to 16kHz
+                channels=1,           # Mono
             )
             
             self._connection = self._client.listen.asynclive.v("1")
@@ -100,15 +105,19 @@ class DeepgramSTTService(BaseSTTService):
             # Set up event handlers
             self._connection.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
             self._connection.on(LiveTranscriptionEvents.Error, self._on_error)
+            self._connection.on(LiveTranscriptionEvents.Open, self._on_open)
+            self._connection.on(LiveTranscriptionEvents.Close, self._on_close)
+            self._connection.on(LiveTranscriptionEvents.Metadata, self._on_metadata)
             
             # Start the connection
             await self._connection.start(options)
             self._running = True
             
-            logger.info("deepgram_started")
+            print("✅ Deepgram STT connected! Listening for speech...")
+            logger.info("deepgram_started", model="nova-2", sample_rate=16000)
             
-        except ImportError:
-            logger.error("deepgram_sdk_not_installed")
+        except ImportError as e:
+            logger.error("deepgram_import_error", error=str(e), hint="pip install 'deepgram-sdk>=3.0,<4.0'")
         except Exception as e:
             logger.error("deepgram_start_failed", error=str(e))
     
@@ -122,10 +131,22 @@ class DeepgramSTTService(BaseSTTService):
     async def process_audio(self, audio_data: bytes):
         """Send audio data to Deepgram for transcription."""
         if self._connection and self._running:
+            # Debug: log audio chunk size periodically
+            if not hasattr(self, '_chunk_count'):
+                self._chunk_count = 0
+            self._chunk_count += 1
+            if self._chunk_count % 50 == 0:
+                # Check if audio has any signal (not silence)
+                import struct
+                samples = struct.unpack(f'{len(audio_data)//2}h', audio_data)
+                max_amplitude = max(abs(s) for s in samples) if samples else 0
+                avg_amplitude = sum(abs(s) for s in samples) / len(samples) if samples else 0
+                print(f"🔊 Audio chunk #{self._chunk_count}: {len(audio_data)} bytes, max amp: {max_amplitude}, avg amp: {avg_amplitude:.0f}")
+            
             await self._connection.send(audio_data)
     
-    def _on_transcript(self, *args, **kwargs):
-        """Handle transcript events from Deepgram."""
+    async def _on_transcript(self, *args, **kwargs):
+        """Handle transcript events from Deepgram (async handler required by SDK v3)."""
         # Deepgram SDK passes result as first positional arg or keyword
         result = args[1] if len(args) > 1 else kwargs.get("result")
         
@@ -135,6 +156,9 @@ class DeepgramSTTService(BaseSTTService):
         for alt in result.channel.alternatives:
             if not alt.transcript:
                 continue
+            
+            # Print transcript immediately for debugging
+            print(f"📝 TRANSCRIPT: {alt.transcript}")
             
             # Get speaker label if available
             speaker = None
@@ -153,10 +177,27 @@ class DeepgramSTTService(BaseSTTService):
             
             self._emit_transcript(chunk)
     
-    def _on_error(self, *args, **kwargs):
-        """Handle error events from Deepgram."""
+    async def _on_error(self, *args, **kwargs):
+        """Handle error events from Deepgram (async handler required by SDK v3)."""
         error = args[1] if len(args) > 1 else kwargs.get("error")
+        print(f"❌ Deepgram ERROR: {error}")
         logger.error("deepgram_error", error=str(error))
+    
+    async def _on_open(self, *args, **kwargs):
+        """Handle WebSocket open event."""
+        print("🔗 Deepgram WebSocket OPENED")
+        logger.info("deepgram_websocket_opened")
+    
+    async def _on_close(self, *args, **kwargs):
+        """Handle WebSocket close event."""
+        print("🔒 Deepgram WebSocket CLOSED")
+        logger.info("deepgram_websocket_closed")
+    
+    async def _on_metadata(self, *args, **kwargs):
+        """Handle metadata events - confirms connection is working."""
+        metadata = args[1] if len(args) > 1 else kwargs.get("metadata")
+        print(f"📋 Deepgram Metadata received: request_id={getattr(metadata, 'request_id', 'N/A')}")
+        logger.info("deepgram_metadata", metadata=str(metadata))
 
 
 class GoogleSTTService(BaseSTTService):

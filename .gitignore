@@ -82,6 +82,9 @@ Desktop.ini
 # ===========================================
 # Project Specific
 # ===========================================
+# Browser session data (saved login cookies — never commit!)
+.browser_data/
+
 # Audio/video files from testing
 *.wav
 *.mp3
@@ -98,3 +101,7 @@ playwright/.cache/
 
 # Meeting recordings (if any)
 recordings/
+
+# Backup files
+*_backup.py
+*_backup.*
