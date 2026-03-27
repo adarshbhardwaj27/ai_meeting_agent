@@ -254,16 +254,6 @@ class RecallBot(BaseMeetingBot):
             logger.error("recall_send_chat_error", error=str(e))
             return False
 
-    # ── Audio (handled by Recall.ai) ─────────────────────────────────
-
-    async def start_audio_capture(self):
-        """Not needed — Recall.ai handles audio capture internally."""
-        pass
-
-    async def stop_audio_capture(self):
-        """Not needed — Recall.ai handles audio capture internally."""
-        pass
-
     # ── Internal helpers ─────────────────────────────────────────────
 
     async def _wait_for_join(self, timeout: int = 120) -> bool:

@@ -17,12 +17,6 @@ class LLMProvider(Enum):
     AZURE_OPENAI = "azure_openai"
 
 
-class STTProvider(Enum):
-    DEEPGRAM = "deepgram"
-    GOOGLE = "google"
-    AZURE = "azure"
-
-
 class ConflictSensitivity(Enum):
     LOW = "low"
     MEDIUM = "medium"
@@ -65,26 +59,6 @@ class LLMConfig:
     )
     azure_openai_deployment: Optional[str] = field(
         default_factory=lambda: os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    )
-
-
-@dataclass
-class STTConfig:
-    """Speech-to-text configuration."""
-    provider: STTProvider = field(
-        default_factory=lambda: STTProvider(os.getenv("STT_PROVIDER", "deepgram"))
-    )
-    deepgram_api_key: Optional[str] = field(
-        default_factory=lambda: os.getenv("DEEPGRAM_API_KEY")
-    )
-    google_credentials_path: Optional[str] = field(
-        default_factory=lambda: os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    )
-    azure_speech_key: Optional[str] = field(
-        default_factory=lambda: os.getenv("AZURE_SPEECH_KEY")
-    )
-    azure_speech_region: str = field(
-        default_factory=lambda: os.getenv("AZURE_SPEECH_REGION", "eastus")
     )
 
 
@@ -170,7 +144,6 @@ class AppConfig:
     """Main application configuration."""
     bot: BotConfig = field(default_factory=BotConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
-    stt: STTConfig = field(default_factory=STTConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
     chat: ChatConfig = field(default_factory=ChatConfig)

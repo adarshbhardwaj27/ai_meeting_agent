@@ -4,7 +4,6 @@ from src.bot.base_bot import BaseMeetingBot, BotState, MeetingPlatform
 from src.bot.google_meet_bot import GoogleMeetBot
 from src.bot.teams_bot import TeamsBot
 from src.bot.recall_bot import RecallBot
-from src.bot.zoom_bot import ZoomBot
 
 
 def create_bot(platform: str, bot_name: str = None) -> BaseMeetingBot:
@@ -63,7 +62,6 @@ __all__ = [
     "GoogleMeetBot",
     "TeamsBot",
     "RecallBot",
-    "ZoomBot",
     "create_bot",
     "detect_platform",
 ]

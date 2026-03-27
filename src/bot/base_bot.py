@@ -34,8 +34,7 @@ class BaseMeetingBot(ABC):
     Abstract base class for meeting bots.
     
     Each platform (Google Meet, Teams, Zoom) has its own implementation
-    that handles the specifics of joining meetings, capturing audio,
-    and sending chat messages.
+    that handles the specifics of joining meetings and sending chat messages.
     """
     
     def __init__(self, bot_name: str = "Alex"):
@@ -44,7 +43,6 @@ class BaseMeetingBot(ABC):
         self.meeting_url: Optional[str] = None
         
         # Callbacks
-        self._on_audio_chunk: Optional[Callable[[bytes], None]] = None
         self._on_chat_message: Optional[Callable[[str, str], None]] = None
         self._on_state_change: Optional[Callable[[BotState], None]] = None
         self._on_participant_joined: Optional[Callable[[str], None]] = None
@@ -87,20 +85,6 @@ class BaseMeetingBot(ABC):
         """
         pass
     
-    @abstractmethod
-    async def start_audio_capture(self):
-        """Start capturing audio from the meeting."""
-        pass
-    
-    @abstractmethod
-    async def stop_audio_capture(self):
-        """Stop capturing audio."""
-        pass
-    
-    def on_audio_chunk(self, callback: Callable[[bytes], None]):
-        """Register callback for audio chunks."""
-        self._on_audio_chunk = callback
-    
     def on_chat_message(self, callback: Callable[[str, str], None]):
         """Register callback for chat messages (sender, text)."""
         self._on_chat_message = callback
@@ -131,11 +115,6 @@ class BaseMeetingBot(ABC):
         
         if self._on_state_change:
             self._on_state_change(new_state)
-    
-    def _emit_audio_chunk(self, audio_data: bytes):
-        """Emit audio data to callback."""
-        if self._on_audio_chunk:
-            self._on_audio_chunk(audio_data)
     
     def _emit_chat_message(self, sender: str, text: str):
         """Emit chat message to callback."""

@@ -48,7 +48,6 @@ class GoogleMeetBot(BaseMeetingBot):
         self._playwright = None
         self._browser = None
         self._page = None
-        self._audio_capture_task = None
         self._chat_monitor_task = None
     
     @property
@@ -235,8 +234,6 @@ class GoogleMeetBot(BaseMeetingBot):
             # Stop background tasks
             if self._chat_monitor_task:
                 self._chat_monitor_task.cancel()
-            if self._audio_capture_task:
-                self._audio_capture_task.cancel()
             
             # Click leave button
             if self._page:
@@ -299,68 +296,6 @@ class GoogleMeetBot(BaseMeetingBot):
         except Exception as e:
             logger.error("send_chat_failed", error=str(e))
             return False
-    
-    async def start_audio_capture(self):
-        """
-        Start capturing audio from the meeting.
-        
-        This uses the Web Audio API to capture the meeting audio stream.
-        """
-        if not self._page:
-            return
-        
-        try:
-            # Inject audio capture script
-            await self._page.evaluate('''
-                () => {
-                    // Create audio context to capture meeting audio
-                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    
-                    // Get all audio elements
-                    const audioElements = document.querySelectorAll('audio, video');
-                    
-                    // Create a media stream destination
-                    const destination = audioContext.createMediaStreamDestination();
-                    
-                    audioElements.forEach(element => {
-                        if (element.srcObject) {
-                            const source = audioContext.createMediaStreamSource(element.srcObject);
-                            source.connect(destination);
-                        }
-                    });
-                    
-                    // Set up recorder
-                    window._meetingRecorder = new MediaRecorder(destination.stream);
-                    window._audioChunks = [];
-                    
-                    window._meetingRecorder.ondataavailable = (e) => {
-                        if (e.data.size > 0) {
-                            window._audioChunks.push(e.data);
-                        }
-                    };
-                    
-                    window._meetingRecorder.start(100); // 100ms chunks
-                }
-            ''')
-            
-            self._audio_capture_task = asyncio.create_task(self._audio_capture_loop())
-            logger.info("audio_capture_started")
-            
-        except Exception as e:
-            logger.error("audio_capture_start_failed", error=str(e))
-    
-    async def stop_audio_capture(self):
-        """Stop audio capture."""
-        if self._audio_capture_task:
-            self._audio_capture_task.cancel()
-        
-        if self._page:
-            try:
-                await self._page.evaluate('window._meetingRecorder?.stop()')
-            except:
-                pass
-        
-        logger.info("audio_capture_stopped")
     
     async def _disable_media(self):
         """Turn off camera and microphone before joining."""
@@ -657,29 +592,3 @@ class GoogleMeetBot(BaseMeetingBot):
                 logger.info("chat_debug_dump", **result)
         except Exception:
             pass
-    
-    async def _audio_capture_loop(self):
-        """Loop to retrieve and emit audio chunks."""
-        while self.state == BotState.IN_MEETING:
-            try:
-                # Get audio chunks from browser
-                chunks = await self._page.evaluate('''
-                    () => {
-                        const chunks = window._audioChunks || [];
-                        window._audioChunks = [];
-                        return chunks.map(c => Array.from(new Uint8Array(c)));
-                    }
-                ''')
-                
-                for chunk_data in chunks:
-                    audio_bytes = bytes(chunk_data)
-                    if audio_bytes:
-                        self._emit_audio_chunk(audio_bytes)
-                
-                await asyncio.sleep(0.1)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("audio_capture_loop_error", error=str(e))
-                await asyncio.sleep(0.5)
