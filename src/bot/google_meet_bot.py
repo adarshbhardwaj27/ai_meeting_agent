@@ -442,36 +442,221 @@ class GoogleMeetBot(BaseMeetingBot):
             return False
     
     async def _monitor_chat(self):
-        """Monitor the chat for new messages."""
+        """
+        Monitor the Google Meet chat for new messages.
+
+        IMPORTANT: The chat panel must be open for message elements to
+        exist in the DOM.  We open it once on startup and then poll.
+        """
+        # ── Step 1: Open the chat panel ─────────────────────────────
+        await asyncio.sleep(3)  # Let meeting UI settle
+
+        chat_opened = False
+        try:
+            chat_btn_selectors = [
+                '[aria-label="Chat with everyone"]',
+                'button[aria-label*="Chat" i]',
+                '[data-panel-id="2"]',
+            ]
+            for selector in chat_btn_selectors:
+                try:
+                    btn = await self._page.query_selector(selector)
+                    if btn:
+                        await btn.click()
+                        chat_opened = True
+                        print("💬 Chat panel opened for monitoring")
+                        logger.info("chat_panel_opened", selector=selector)
+                        await asyncio.sleep(1)
+                        break
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning("chat_panel_open_error", error=str(e))
+
+        if not chat_opened:
+            print("⚠️  Could not open chat panel — @Alex commands won't work")
+            logger.warning("chat_panel_not_opened")
+
+        # ── Step 2: One-time debug dump of chat elements ────────────
+        await self._debug_dump_chat_elements()
+
+        # ── Step 3: Poll for new messages ───────────────────────────
         last_message_count = 0
-        
+
         while self.state == BotState.IN_MEETING:
             try:
-                # Get chat messages
-                messages = await self._page.query_selector_all('[data-message-text]')
-                
-                if len(messages) > last_message_count:
-                    # Process new messages
-                    for msg in messages[last_message_count:]:
-                        try:
-                            text = await msg.get_attribute('data-message-text')
-                            sender_el = await msg.query_selector('[data-sender-name]')
-                            sender = await sender_el.get_attribute('data-sender-name') if sender_el else 'Unknown'
-                            
-                            if sender != self.bot_name:
+                # Use JS evaluation — more robust than query_selector_all
+                result = await self._page.evaluate("""
+                    () => {
+                        const messages = [];
+
+                        // Strategy 1: data-message-text attribute
+                        const msgEls = document.querySelectorAll('[data-message-text]');
+                        if (msgEls.length > 0) {
+                            for (const el of msgEls) {
+                                const text = el.getAttribute('data-message-text')
+                                            || el.textContent.trim();
+                                let sender = 'Unknown';
+                                // Sender info might be on an ancestor or sibling
+                                const senderEl = el.closest('[data-sender-name]')
+                                              || el.parentElement?.querySelector('[data-sender-name]');
+                                if (senderEl) {
+                                    sender = senderEl.getAttribute('data-sender-name');
+                                }
+                                if (text) messages.push({ sender, text });
+                            }
+                            return { strategy: 1, messages };
+                        }
+
+                        // Strategy 2: Locate chat panel via the chat input
+                        const chatInput = document.querySelector(
+                            'textarea[aria-label="Send a message"], '
+                          + 'textarea[aria-label="Send a message to everyone"], '
+                          + '[contenteditable="true"][aria-label*="message" i]'
+                        );
+                        if (!chatInput) return { strategy: 0, messages: [] };
+
+                        // Walk up to find the scrollable messages container
+                        let panel = chatInput.parentElement;
+                        for (let i = 0; i < 15 && panel; i++) {
+                            // The messages container is scrollable and tall
+                            if (panel.scrollHeight > 100 &&
+                                panel.scrollHeight > panel.clientHeight + 5) {
+                                break;
+                            }
+                            panel = panel.parentElement;
+                        }
+                        if (!panel) return { strategy: 0, messages: [] };
+
+                        // Collect visible message-like blocks:
+                        // Each chat message in Meet is a container div holding
+                        // sender-name + message-text children.
+                        // We look for divs whose direct text is ≥3 chars and
+                        // that aren't buttons / inputs.
+                        const candidateDivs = panel.querySelectorAll('div, span');
+                        const seen = new Set();
+
+                        for (const el of candidateDivs) {
+                            // Only leaf-ish text
+                            const text = el.textContent.trim();
+                            if (!text || text.length < 2 || text.length > 1000) continue;
+                            if (seen.has(text)) continue;
+
+                            // Skip form elements & buttons
+                            if (el.closest('button, textarea, input, [role="button"]'))
+                                continue;
+
+                            // Skip timestamps
+                            if (/^\\d{1,2}:\\d{2}\\s*(AM|PM)?$/i.test(text)) continue;
+
+                            // Must be a leaf (no child div/span with same text)
+                            let isLeaf = true;
+                            for (const child of el.querySelectorAll('div, span')) {
+                                if (child !== el &&
+                                    child.textContent.trim() === text) {
+                                    isLeaf = false;
+                                    break;
+                                }
+                            }
+                            if (!isLeaf) continue;
+
+                            seen.add(text);
+                            messages.push({ sender: 'Unknown', text });
+                        }
+
+                        return { strategy: 2, messages };
+                    }
+                """)
+
+                if result:
+                    msg_list = result.get("messages", [])
+                    strategy = result.get("strategy", 0)
+
+                    if len(msg_list) > last_message_count:
+                        for msg in msg_list[last_message_count:]:
+                            text = msg.get("text", "")
+                            sender = msg.get("sender", "Unknown")
+                            if sender != self.bot_name and text:
+                                print(f"💬 Chat [{sender}]: {text}")
+                                logger.info(
+                                    "chat_message_detected",
+                                    sender=sender,
+                                    text=text[:80],
+                                    strategy=strategy,
+                                )
                                 self._emit_chat_message(sender, text)
-                        except:
-                            pass
-                    
-                    last_message_count = len(messages)
-                
-                await asyncio.sleep(0.5)
-                
+
+                        last_message_count = len(msg_list)
+
+                await asyncio.sleep(1)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning("chat_monitor_error", error=str(e))
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
+
+    async def _debug_dump_chat_elements(self):
+        """One-time dump of chat panel elements to help tune selectors."""
+        try:
+            result = await self._page.evaluate("""
+                () => {
+                    const info = {};
+
+                    // Check data-message-text elements
+                    info.dataMessageTextCount = document.querySelectorAll(
+                        '[data-message-text]'
+                    ).length;
+
+                    // Check for chat input
+                    const chatInput = document.querySelector(
+                        'textarea[aria-label="Send a message"], '
+                      + 'textarea[aria-label="Send a message to everyone"]'
+                    );
+                    info.chatInputFound = !!chatInput;
+
+                    // Sample text elements near the chat area
+                    if (chatInput) {
+                        let panel = chatInput.parentElement;
+                        for (let i = 0; i < 10 && panel; i++) {
+                            if (panel.getBoundingClientRect().height > 300) break;
+                            panel = panel.parentElement;
+                        }
+                        if (panel) {
+                            const texts = [];
+                            const els = panel.querySelectorAll('div, span');
+                            for (const el of els) {
+                                const t = el.textContent.trim();
+                                if (t && t.length > 1 && t.length < 100) {
+                                    let isLeaf = true;
+                                    for (const c of el.querySelectorAll('div, span')) {
+                                        if (c !== el && c.textContent.trim() === t) {
+                                            isLeaf = false; break;
+                                        }
+                                    }
+                                    if (isLeaf && !texts.includes(t)) {
+                                        texts.push(t);
+                                    }
+                                }
+                                if (texts.length >= 15) break;
+                            }
+                            info.sampleTexts = texts;
+                        }
+                    }
+
+                    return info;
+                }
+            """)
+            if result:
+                print("🔍 Chat panel debug:")
+                print(f"   data-message-text elements: {result.get('dataMessageTextCount', 0)}")
+                print(f"   Chat input found: {result.get('chatInputFound', False)}")
+                samples = result.get("sampleTexts", [])
+                if samples:
+                    print(f"   Sample texts in chat area: {samples[:8]}")
+                logger.info("chat_debug_dump", **result)
+        except Exception:
+            pass
     
     async def _audio_capture_loop(self):
         """Loop to retrieve and emit audio chunks."""

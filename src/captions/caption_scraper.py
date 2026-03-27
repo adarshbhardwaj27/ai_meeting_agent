@@ -460,8 +460,16 @@ class CaptionScraper:
                 if not text or len(text) < 3:
                     continue
 
-                # Only emit if the text has changed
-                if text != self._last_caption_text:
+                # ── KEY FIX: filter noise BEFORE dedup ──────────────
+                # Without this, timestamps like "12:49AM" get into
+                # _last_caption_text, which makes the REAL caption look
+                # "new" on every poll → infinite repeats.
+                if self._is_noise(text):
+                    continue
+
+                # Only emit if text is genuinely new (not same or substring of last)
+                if (text != self._last_caption_text and
+                    not self._last_caption_text.startswith(text)):
                     new_captions.append((speaker, text))
                     self._last_caption_speaker = speaker
                     self._last_caption_text = text
@@ -472,30 +480,39 @@ class CaptionScraper:
             logger.debug("caption_extract_error", error=str(e))
             return []
 
-    # ── Emit transcript chunks ───────────────────────────────────────
+    # ── Noise detection ──────────────────────────────────────────────
 
-    def _emit(self, speaker: str, text: str):
-        """Convert a caption to a TranscriptChunk and emit it."""
+    def _is_noise(self, text: str) -> bool:
+        """
+        Check if text is UI noise rather than actual speech.
+
+        Called in _extract_captions() BEFORE updating _last_caption_text
+        so that noise never corrupts the dedup state.
+        """
         import re
 
         t = text.strip()
 
-        # Skip meeting codes (exact or doubled)
+        # Meeting codes (exact or doubled)
         if self._meeting_code and self._meeting_code in t.lower():
-            return
+            return True
         if re.fullmatch(r'([a-z]{3}-[a-z]{4}-[a-z]{3})+', t, re.IGNORECASE):
-            return
+            return True
 
-        # Skip ALL-CAPS names (video tile overlays like "ADARSH BHARDWAJ")
+        # Timestamps (e.g. "12:48AM", "1:30 PM", "12:48")
+        if re.fullmatch(r'\d{1,2}:\d{2}\s*(AM|PM|am|pm)?', t):
+            return True
+
+        # ALL-CAPS names (video tile overlays like "ADARSH BHARDWAJ")
         if t == t.upper() and re.match(r'^[A-Z\s]+$', t) and len(t) > 2:
-            return
+            return True
 
-        # Skip very short non-sentence text (likely UI labels)
+        # Very short non-sentence text (likely UI labels)
         words = t.split()
         if len(words) <= 2 and not any(c in t for c in '.!?,;:'):
-            return
+            return True
 
-        # Skip known UI phrases
+        # Known UI phrases
         ui_phrases = [
             'turn on', 'turn off', 'ctrl +', 'more options',
             'leave call', 'raise hand', 'muted', 'presenting',
@@ -503,6 +520,17 @@ class CaptionScraper:
             'participants', 'breakout', 'host controls',
         ]
         if any(phrase in t.lower() for phrase in ui_phrases):
+            return True
+
+        return False
+
+    # ── Emit transcript chunks ───────────────────────────────────────
+
+    def _emit(self, speaker: str, text: str):
+        """Convert a caption to a TranscriptChunk and emit it."""
+        # Safety-net filter (noise is already filtered in _extract_captions,
+        # but this protects against any edge case)
+        if self._is_noise(text):
             return
 
         print(f"📝 [{speaker}]: {text}")
