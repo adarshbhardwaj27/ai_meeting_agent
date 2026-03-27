@@ -91,12 +91,16 @@ class RecallBot(BaseMeetingBot):
                 "Content-Type": "application/json",
             }
 
-            # Build the bot creation payload
+            # Build the bot creation payload (Recall.ai v2 API format)
             payload = {
                 "meeting_url": meeting_url,
                 "bot_name": f"{self.bot_name} (AI)",
-                "transcription_options": {
-                    "provider": config.recall.transcription_provider,
+                "recording_config": {
+                    "transcript": {
+                        "provider": {
+                            "meeting_captions": {}
+                        },
+                    },
                 },
                 "chat": {
                     "on_bot_join": {
@@ -110,10 +114,13 @@ class RecallBot(BaseMeetingBot):
             # Add real-time transcript webhook if configured
             webhook_url = config.recall.webhook_url
             if webhook_url:
-                payload["real_time_transcription"] = {
-                    "destination_url": webhook_url,
-                    "partial_results": True,
-                }
+                payload["recording_config"]["realtime_endpoints"] = [
+                    {
+                        "type": "webhook",
+                        "url": webhook_url,
+                        "events": ["transcript.data"],
+                    }
+                ]
 
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(
