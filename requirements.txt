@@ -1,12 +1,15 @@
 # Real-Time AI Meeting Assistant - Dependencies
-# v2: Caption-based (no audio capture needed!)
+# v2: Multi-platform (Google Meet + Teams + Zoom)
 
 # LLM Integration
 openai>=1.12.0
 tiktoken>=0.5.0
 
-# Browser Automation (joins Google Meet)
+# Browser Automation (joins Google Meet via Playwright)
 playwright>=1.40.0
+
+# HTTP Client (Recall.ai API calls for Teams/Zoom)
+httpx>=0.27.0
 
 # Configuration
 python-dotenv>=1.0.0
@@ -20,7 +23,7 @@ tenacity>=8.2.0
 # Data Processing
 python-dateutil>=2.8.0
 
-# Async HTTP (for future APIs)
+# Async HTTP Server (Recall.ai webhook receiver + future APIs)
 aiohttp>=3.9.0
 
 # Testing

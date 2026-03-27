@@ -142,6 +142,30 @@ class ChatConfig:
 
 
 @dataclass
+class RecallConfig:
+    """Recall.ai configuration for Teams/Zoom meeting bot."""
+    api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("RECALL_API_KEY")
+    )
+    api_base_url: Optional[str] = field(
+        default_factory=lambda: os.getenv(
+            "RECALL_API_BASE_URL", "https://us-west-2.recall.ai/api/v1"
+        )
+    )
+    webhook_port: int = field(
+        default_factory=lambda: int(os.getenv("RECALL_WEBHOOK_PORT", "8765"))
+    )
+    webhook_url: Optional[str] = field(
+        default_factory=lambda: os.getenv("RECALL_WEBHOOK_URL")
+    )
+    transcription_provider: str = field(
+        default_factory=lambda: os.getenv(
+            "RECALL_TRANSCRIPTION_PROVIDER", "meeting_captions"
+        )
+    )
+
+
+@dataclass
 class AppConfig:
     """Main application configuration."""
     bot: BotConfig = field(default_factory=BotConfig)
@@ -150,6 +174,7 @@ class AppConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
     chat: ChatConfig = field(default_factory=ChatConfig)
+    recall: RecallConfig = field(default_factory=RecallConfig)
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO")
     )

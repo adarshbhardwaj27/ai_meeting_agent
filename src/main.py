@@ -1,18 +1,14 @@
 """
 Main Orchestrator for the Real-Time AI Meeting Assistant.
 
-Architecture (v2 — Caption-based):
-  Google Meet (Playwright) → Built-in Captions → CaptionScraper
-      → ContextEngine → TriggerEngine → LLM → ChatManager → Meet Chat
+Architecture (v2 — Multi-platform):
+  Google Meet:  Playwright → Built-in Captions → CaptionScraper
+  Teams/Zoom:   Recall.ai API → Webhook → RecallWebhookServer
+      → ContextEngine → TriggerEngine → LLM → ChatManager → Meeting Chat
 
-This version reads Google Meet's own live captions instead of capturing
-audio and sending it to an external STT service. It's simpler, cheaper,
-and far more reliable than the audio-capture approach.
-
-What changed from v1:
-  Removed: SystemAudioCapture (Stereo Mix / PyAudio)
-  Removed: Deepgram STT streaming
-  Added:   CaptionScraper (reads Google Meet's built-in captions)
+Google Meet uses browser automation + caption scraping (free, no API).
+Teams and Zoom use Recall.ai managed API (no browser, no Azure setup).
+The downstream pipeline is identical regardless of platform.
 """
 
 import asyncio
@@ -29,7 +25,7 @@ from src.context import (
 from src.triggers import TriggerEngine
 from src.reasoning import LLMService
 from src.chat import ChatManager
-from src.bot import create_bot, detect_platform, BaseMeetingBot, BotState
+from src.bot import create_bot, detect_platform, BaseMeetingBot, BotState, MeetingPlatform
 from src.captions import CaptionScraper
 
 # Configure structured logging
@@ -58,12 +54,15 @@ logger = structlog.get_logger()
 
 class MeetingAssistant:
     """
-    Main orchestrator for the AI meeting assistant (v2 — caption-based).
+    Main orchestrator for the AI meeting assistant (v2 — multi-platform).
 
     Pipeline:
-      CaptionScraper ──transcript──> ContextEngine ──context──> TriggerEngine
-                                                                       |
-      ChatManager <──response──── LLMService <──trigger+context────────+
+      Google Meet: CaptionScraper ──transcript──> ContextEngine
+      Teams/Zoom:  RecallWebhook  ──transcript──> ContextEngine
+                                                        |
+      ContextEngine ──context──> TriggerEngine          |
+                                       |                |
+      ChatManager <──response── LLMService <──trigger+context──+
     """
 
     def __init__(self, meeting_url: str):
@@ -73,6 +72,7 @@ class MeetingAssistant:
         # Components (initialised in start())
         self.bot: Optional[BaseMeetingBot] = None
         self.caption_scraper: Optional[CaptionScraper] = None
+        self.webhook_server = None  # RecallWebhookServer for Teams/Zoom
         self.context_engine: Optional[ContextEngine] = None
         self.trigger_engine: Optional[TriggerEngine] = None
         self.llm_service: Optional[LLMService] = None
@@ -100,7 +100,7 @@ class MeetingAssistant:
             # 1. LLM service
             self.llm_service = LLMService()
 
-            # 2. Meeting bot (Playwright)
+            # 2. Meeting bot (platform-specific)
             self.bot = create_bot(self.platform.value)
 
             # 3. Chat manager (sends messages via bot)
@@ -117,41 +117,59 @@ class MeetingAssistant:
             # 5. Trigger engine (decides when to speak)
             self.trigger_engine = TriggerEngine()
 
-            # 6. Caption scraper (reads Meet's built-in captions)
-            self.caption_scraper = CaptionScraper(
-                on_transcript=self._on_transcript_chunk,
-                poll_interval_ms=300,
-                meeting_url=self.meeting_url,
-            )
-
-            # 7. Bot callbacks
+            # 6. Bot callbacks
             self.bot.on_chat_message(self._on_chat_message)
             self.bot.on_state_change(self._on_bot_state_change)
 
-            # 8. Join the meeting
+            # 7. Join the meeting
             print(f"🔗 Joining meeting: {self.meeting_url}")
-            joined = await self.bot.join(self.meeting_url)
-            if not joined:
-                raise Exception("Failed to join meeting")
+            print(f"📋 Platform: {self.platform.value}")
 
-            # 9. Start services
+            # ── Platform-specific: start transcript source ───────────
+            if self.platform == MeetingPlatform.GOOGLE_MEET:
+                # Google Meet: use browser + caption scraping (free)
+                self.caption_scraper = CaptionScraper(
+                    on_transcript=self._on_transcript_chunk,
+                    poll_interval_ms=300,
+                    meeting_url=self.meeting_url,
+                )
+
+                joined = await self.bot.join(self.meeting_url)
+                if not joined:
+                    raise Exception("Failed to join meeting")
+
+                page = self.bot.get_page()
+                if page:
+                    await self.caption_scraper.start(page)
+                else:
+                    print("⚠️  Could not get browser page for caption scraping")
+                    logger.error("no_page_for_captions")
+
+            else:
+                # Teams / Zoom: use Recall.ai (managed API + webhook)
+                from src.transcription.recall_webhook import RecallWebhookServer
+
+                self.webhook_server = RecallWebhookServer(
+                    on_transcript=self._on_transcript_chunk,
+                    port=config.recall.webhook_port,
+                )
+                await self.webhook_server.start()
+
+                joined = await self.bot.join(self.meeting_url)
+                if not joined:
+                    raise Exception("Failed to join meeting")
+
+            # ── Common services ──────────────────────────────────────
             await self.context_engine.start()
             await self.trigger_engine.start()
 
-            # 10. Start caption scraping (the key step!)
-            page = self.bot.get_page()
-            if page:
-                await self.caption_scraper.start(page)
-            else:
-                print("⚠️  Could not get browser page for caption scraping")
-                logger.error("no_page_for_captions")
-
-            # 11. Main processing loop
+            # Main processing loop
             self._running = True
             self._main_loop_task = asyncio.create_task(self._main_loop())
 
-            print("🚀 Meeting assistant is LIVE — watching captions")
-            logger.info("assistant_started")
+            source = "captions" if self.platform == MeetingPlatform.GOOGLE_MEET else "Recall.ai"
+            print(f"🚀 Meeting assistant is LIVE — listening via {source}")
+            logger.info("assistant_started", transcript_source=source)
 
         except Exception as e:
             logger.error("assistant_start_failed", error=str(e))
@@ -172,6 +190,9 @@ class MeetingAssistant:
 
         if self.caption_scraper:
             await self.caption_scraper.stop()
+
+        if self.webhook_server:
+            await self.webhook_server.stop()
 
         if self.bot:
             await self.bot.leave()
@@ -411,7 +432,7 @@ def main():
     parser.add_argument(
         "--meeting-url",
         "-m",
-        help="Google Meet URL to join",
+        help="Meeting URL (Google Meet, Teams, or Zoom)",
     )
 
     parser.add_argument(
@@ -431,6 +452,7 @@ def main():
         parser.print_help()
         print("\n💡 Try: python -m src.main --simulate")
         print("   Or:  python -m src.main -m https://meet.google.com/xxx-yyyy-zzz")
+        print("   Or:  python -m src.main -m https://teams.microsoft.com/l/meetup-join/...")
 
 
 if __name__ == "__main__":
