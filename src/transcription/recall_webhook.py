@@ -97,10 +97,16 @@ class RecallWebhookServer:
     async def stop(self):
         """Stop the webhook server."""
         self._running = False
-        if self._site:
-            await self._site.stop()
-        if self._runner:
-            await self._runner.cleanup()
+        try:
+            if self._site:
+                await self._site.stop()
+        except RuntimeError:
+            pass  # Site may not be fully registered if join failed early
+        try:
+            if self._runner:
+                await self._runner.cleanup()
+        except Exception:
+            pass
         logger.info(
             "recall_webhook_stopped",
             events_received=self._events_received,

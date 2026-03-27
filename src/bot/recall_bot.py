@@ -162,8 +162,11 @@ class RecallBot(BaseMeetingBot):
             self._set_state(BotState.ERROR)
             return False
         except Exception as e:
-            logger.error("recall_join_failed", error=str(e))
-            print(f"❌ Recall.ai join failed: {e}")
+            error_detail = f"{type(e).__name__}: {e}" if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error("recall_join_failed", error=error_detail)
+            print(f"❌ Recall.ai join failed: {error_detail}")
+            import traceback
+            traceback.print_exc()
             self._set_state(BotState.ERROR)
             return False
 
