@@ -72,7 +72,6 @@ class MeetingAssistant:
         # Components (initialised in start())
         self.bot: Optional[BaseMeetingBot] = None
         self.caption_scraper: Optional[CaptionScraper] = None
-        self.webhook_server = None  # RecallWebhookServer for Teams/Zoom
         self.context_engine: Optional[ContextEngine] = None
         self.trigger_engine: Optional[TriggerEngine] = None
         self.llm_service: Optional[LLMService] = None
@@ -146,14 +145,9 @@ class MeetingAssistant:
                     logger.error("no_page_for_captions")
 
             else:
-                # Teams / Zoom: use Recall.ai (managed API + webhook)
-                from src.transcription.recall_webhook import RecallWebhookServer
-
-                self.webhook_server = RecallWebhookServer(
-                    on_transcript=self._on_transcript_chunk,
-                    port=config.recall.webhook_port,
-                )
-                await self.webhook_server.start()
+                # Teams / Zoom: use Recall.ai (managed API + polling)
+                # No webhook server needed — bot polls transcript API directly
+                self.bot.set_transcript_callback(self._on_transcript_chunk)
 
                 joined = await self.bot.join(self.meeting_url)
                 if not joined:
@@ -190,9 +184,6 @@ class MeetingAssistant:
 
         if self.caption_scraper:
             await self.caption_scraper.stop()
-
-        if self.webhook_server:
-            await self.webhook_server.stop()
 
         if self.bot:
             await self.bot.leave()

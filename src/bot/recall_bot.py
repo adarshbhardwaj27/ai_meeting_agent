@@ -51,6 +51,8 @@ class RecallBot(BaseMeetingBot):
         self._api_key: Optional[str] = None
         self._api_base: str = DEFAULT_API_BASE
         self._chat_monitor_task: Optional[asyncio.Task] = None
+        self._transcript_monitor_task: Optional[asyncio.Task] = None
+        self._transcript_callback: Optional[Callable] = None
 
         # Load Recall.ai config
         self._api_key = config.recall.api_key
@@ -70,6 +72,10 @@ class RecallBot(BaseMeetingBot):
     def get_page(self):
         """Not applicable for Recall.ai — there is no browser page."""
         return None
+
+    def set_transcript_callback(self, callback: Callable):
+        """Set callback for transcript chunks (used in polling mode)."""
+        self._transcript_callback = callback
 
     # ── Join / Leave ─────────────────────────────────────────────────
 
@@ -111,17 +117,6 @@ class RecallBot(BaseMeetingBot):
                 },
             }
 
-            # Add real-time transcript webhook if configured
-            webhook_url = config.recall.webhook_url
-            if webhook_url:
-                payload["recording_config"]["realtime_endpoints"] = [
-                    {
-                        "type": "webhook",
-                        "url": webhook_url,
-                        "events": ["transcript.data"],
-                    }
-                ]
-
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(
                     f"{self._api_base}/bot/",
@@ -145,10 +140,14 @@ class RecallBot(BaseMeetingBot):
                         self._set_state(BotState.IN_MEETING)
                         print("🚀 Bot has joined the meeting!")
 
-                        # Start monitoring chat messages
+                        # Start monitoring chat + transcript
                         self._chat_monitor_task = asyncio.create_task(
                             self._monitor_chat()
                         )
+                        if self._transcript_callback:
+                            self._transcript_monitor_task = asyncio.create_task(
+                                self._monitor_transcript()
+                            )
                         return True
                     else:
                         self._set_state(BotState.ERROR)
@@ -181,13 +180,14 @@ class RecallBot(BaseMeetingBot):
         """Leave the meeting by telling Recall.ai to remove the bot."""
         self._set_state(BotState.LEAVING)
 
-        # Stop chat monitor
-        if self._chat_monitor_task:
-            self._chat_monitor_task.cancel()
-            try:
-                await self._chat_monitor_task
-            except asyncio.CancelledError:
-                pass
+        # Stop monitors
+        for task in (self._chat_monitor_task, self._transcript_monitor_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         if not self._bot_id:
             self._set_state(BotState.DISCONNECTED)
@@ -383,6 +383,64 @@ class RecallBot(BaseMeetingBot):
             except Exception as e:
                 logger.warning("recall_chat_monitor_error", error=str(e))
                 await asyncio.sleep(5)
+
+    async def _monitor_transcript(self):
+        """
+        Poll Recall.ai for new transcript entries.
+
+        Replaces webhook-based real-time transcription — works on any
+        network without ngrok/tunnels. Polls every 2s, emits only new
+        chunks via the transcript callback.
+        """
+        from src.context.models import TranscriptChunk
+        from datetime import datetime
+
+        last_count = 0
+        logger.info("recall_transcript_polling_started")
+
+        while self.state == BotState.IN_MEETING:
+            try:
+                import httpx
+
+                headers = {"Authorization": f"Token {self._api_key}"}
+
+                async with httpx.AsyncClient(timeout=10) as client:
+                    response = await client.get(
+                        f"{self._api_base}/bot/{self._bot_id}/transcript/",
+                        headers=headers,
+                    )
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        entries = data if isinstance(data, list) else data.get("results", [])
+
+                        if len(entries) > last_count:
+                            for entry in entries[last_count:]:
+                                speaker = entry.get("speaker", "Unknown")
+                                words = entry.get("words", [])
+                                text = " ".join(w.get("text", "") for w in words).strip() if words else entry.get("text", "")
+
+                                if text and self._transcript_callback:
+                                    chunk = TranscriptChunk(
+                                        speaker=speaker,
+                                        text=text,
+                                        timestamp=datetime.now(),
+                                        is_final=entry.get("is_final", True),
+                                    )
+                                    print(f"🎤 [{speaker}]: {text}")
+                                    self._transcript_callback(chunk)
+
+                            last_count = len(entries)
+
+                await asyncio.sleep(2)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("recall_transcript_poll_error", error=f"{type(e).__name__}: {e}")
+                await asyncio.sleep(5)
+
+        logger.info("recall_transcript_polling_stopped", total_entries=last_count)
 
     async def get_bot_status(self) -> dict:
         """Get the current status of the Recall.ai bot (for debugging)."""
