@@ -12,6 +12,7 @@ Docs: https://docs.recall.ai
 """
 
 import asyncio
+import atexit
 from typing import Optional, Callable
 import structlog
 
@@ -119,6 +120,23 @@ class RecallBot(BaseMeetingBot):
                 },
             }
 
+            # If a real-time tunnel URL is configured, add realtime_endpoints
+            # so Recall.ai pushes transcript chunks via WebSocket during the meeting
+            if config.recall.realtime_url:
+                payload["recording_config"]["realtime_endpoints"] = [
+                    {
+                        "type": "websocket",
+                        "url": config.recall.realtime_url,
+                    }
+                ]
+                logger.info(
+                    "recall_realtime_enabled",
+                    url=config.recall.realtime_url,
+                )
+            else:
+                print("ℹ️  No RECALL_REALTIME_URL — transcript available after meeting ends")
+                print("   Set up a tunnel for real-time (see .env for instructions)")
+
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(
                     f"{self._api_base}/bot/",
@@ -141,6 +159,10 @@ class RecallBot(BaseMeetingBot):
                     if joined:
                         self._set_state(BotState.IN_MEETING)
                         print("🚀 Bot has joined the meeting!")
+
+                        # Register cleanup so bot ALWAYS leaves
+                        # (even on Ctrl+C, crash, unhandled exception)
+                        atexit.register(self._leave_sync)
 
                         # Start monitoring chat + transcript
                         self._chat_monitor_task = asyncio.create_task(
@@ -180,7 +202,16 @@ class RecallBot(BaseMeetingBot):
 
     async def leave(self):
         """Leave the meeting by telling Recall.ai to remove the bot."""
+        if self.state == BotState.DISCONNECTED:
+            return  # Already left
+
         self._set_state(BotState.LEAVING)
+
+        # Unregister atexit to avoid double-leave
+        try:
+            atexit.unregister(self._leave_sync)
+        except Exception:
+            pass
 
         # Stop monitors
         for task in (self._chat_monitor_task, self._transcript_monitor_task):
@@ -188,7 +219,7 @@ class RecallBot(BaseMeetingBot):
                 task.cancel()
                 try:
                     await task
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, Exception):
                     pass
 
         if not self._bot_id:
@@ -219,6 +250,37 @@ class RecallBot(BaseMeetingBot):
             logger.error("recall_leave_error", error=str(e))
 
         self._set_state(BotState.DISCONNECTED)
+
+    def _leave_sync(self):
+        """
+        Synchronous cleanup — called by atexit to ensure bot leaves.
+
+        When user presses Ctrl+C, the asyncio event loop may be dead,
+        so we can't use async leave(). This uses synchronous httpx.
+        """
+        if not self._bot_id or self.state == BotState.DISCONNECTED:
+            return
+
+        try:
+            import httpx
+
+            headers = {"Authorization": f"Token {self._api_key}"}
+
+            with httpx.Client(timeout=10) as client:
+                response = client.post(
+                    f"{self._api_base}/bot/{self._bot_id}/leave_call/",
+                    headers=headers,
+                )
+                if response.status_code in (200, 204):
+                    print("\n👋 Bot left the meeting (cleanup)")
+                else:
+                    # Bot might already be gone — that's OK
+                    print(f"\n⚠️  Bot leave returned {response.status_code} (may already be gone)")
+
+        except Exception as e:
+            print(f"\n⚠️  Could not send leave: {e}")
+
+        self._bot_id = None  # Prevent double cleanup
 
     # ── Chat ─────────────────────────────────────────────────────────
 
@@ -388,21 +450,31 @@ class RecallBot(BaseMeetingBot):
 
     async def _monitor_transcript(self):
         """
-        Poll Recall.ai for new transcript entries.
+        Poll Recall.ai for transcript — smart fallback for when real-time
+        WebSocket is not configured.
 
-        Uses the new Recall.ai API:
-        1. GET /bot/{id}/ → recordings[0].id (recording_id)
-        2. GET /transcript/?recording_id={id} → download_url
-        3. Download the transcript JSON and parse new utterances
+        The transcript download_url is only available AFTER the recording
+        finishes (status: "done"). During the meeting it stays null.
 
-        Falls back to polling /bot/{id}/ media_shortcuts if available.
+        This monitor:
+        1. Watches the recording status
+        2. When status becomes "done", downloads the full transcript
+        3. Processes any new utterances via callback
+
+        If realtime_endpoints are configured, this serves as a safety net
+        that picks up anything missed by the WebSocket feed.
         """
         from src.context.models import TranscriptChunk
         from datetime import datetime
 
         last_count = 0
         recording_id = None
-        logger.info("recall_transcript_polling_started")
+        has_realtime = bool(config.recall.realtime_url)
+        already_warned = False
+        logger.info(
+            "recall_transcript_monitor_started",
+            mode="realtime_fallback" if has_realtime else "post_meeting_poll",
+        )
 
         while self.state == BotState.IN_MEETING:
             try:
@@ -425,10 +497,10 @@ class RecallBot(BaseMeetingBot):
                                 logger.info("recall_recording_found", recording_id=recording_id)
 
                     if not recording_id:
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(5)
                         continue
 
-                    # Step 2: Get transcript for this recording
+                    # Step 2: Check transcript status + download_url
                     transcript_resp = await client.get(
                         f"{self._api_base}/transcript/?recording_id={recording_id}",
                         headers=headers,
@@ -440,43 +512,71 @@ class RecallBot(BaseMeetingBot):
 
                         if results:
                             transcript_obj = results[0]
+                            status_code = transcript_obj.get("status", {}).get("code", "unknown")
                             download_url = transcript_obj.get("data", {}).get("download_url")
 
-                            if download_url:
-                                # Step 3: Download the transcript JSON
-                                dl_resp = await client.get(download_url)
-                                if dl_resp.status_code == 200:
-                                    utterances = dl_resp.json()
-                                    if not isinstance(utterances, list):
-                                        utterances = utterances.get("results", [])
+                            # During the meeting: status is "processing", download_url is null
+                            if not download_url:
+                                if not already_warned and not has_realtime:
+                                    logger.info(
+                                        "recall_transcript_not_ready",
+                                        status=status_code,
+                                        hint="Transcript available after meeting ends",
+                                    )
+                                    already_warned = True
+                                await asyncio.sleep(10)
+                                continue
 
-                                    if len(utterances) > last_count:
-                                        for entry in utterances[last_count:]:
-                                            speaker = entry.get("speaker", entry.get("participant", {}).get("name", "Unknown"))
-                                            words = entry.get("words", [])
-                                            text = " ".join(w.get("text", "") for w in words).strip() if words else entry.get("text", "")
+                            # download_url is available — recording is done or has partial data
+                            dl_resp = await client.get(download_url)
+                            if dl_resp.status_code == 200:
+                                utterances = dl_resp.json()
+                                if not isinstance(utterances, list):
+                                    utterances = utterances.get("results", [])
 
-                                            if text and self._transcript_callback:
-                                                chunk = TranscriptChunk(
-                                                    speaker=speaker,
-                                                    text=text,
-                                                    timestamp=datetime.now(),
-                                                    is_final=True,
-                                                )
-                                                print(f"🎤 [{speaker}]: {text}")
-                                                self._transcript_callback(chunk)
+                                if len(utterances) > last_count:
+                                    source_label = "📜" if has_realtime else "🎤"
+                                    for entry in utterances[last_count:]:
+                                        speaker_name = entry.get("participant", {}).get("name")
+                                        speaker = speaker_name or entry.get("speaker", "Unknown")
+                                        words = entry.get("words", [])
+                                        text = (
+                                            " ".join(w.get("text", "") for w in words).strip()
+                                            if words
+                                            else entry.get("text", "")
+                                        )
 
-                                        last_count = len(utterances)
+                                        if text and self._transcript_callback:
+                                            chunk = TranscriptChunk(
+                                                speaker=speaker,
+                                                text=text,
+                                                timestamp=datetime.now(),
+                                                is_final=True,
+                                            )
+                                            print(f"{source_label} [{speaker}]: {text}")
+                                            self._transcript_callback(chunk)
 
-                await asyncio.sleep(3)
+                                    last_count = len(utterances)
+
+                            # If recording is "done", grab final transcript and exit monitor
+                            if status_code == "done":
+                                logger.info(
+                                    "recall_transcript_complete",
+                                    total_utterances=last_count,
+                                )
+                                print(f"✅ Full transcript downloaded ({last_count} utterances)")
+                                break
+
+                # Poll less aggressively — transcript isn't available real-time anyway
+                await asyncio.sleep(10 if not has_realtime else 30)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning("recall_transcript_poll_error", error=f"{type(e).__name__}: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(10)
 
-        logger.info("recall_transcript_polling_stopped", total_entries=last_count)
+        logger.info("recall_transcript_monitor_stopped", total_entries=last_count)
 
     async def get_bot_status(self) -> dict:
         """Get the current status of the Recall.ai bot (for debugging)."""

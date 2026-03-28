@@ -13,6 +13,7 @@ The downstream pipeline is identical regardless of platform.
 
 import asyncio
 import argparse
+import signal
 from datetime import datetime
 from typing import Optional, List
 import structlog
@@ -27,6 +28,7 @@ from src.reasoning import LLMService
 from src.chat import ChatManager
 from src.bot import create_bot, detect_platform, BaseMeetingBot, BotState, MeetingPlatform
 from src.captions import CaptionScraper
+from src.transcription.realtime_server import RealtimeTranscriptServer
 
 # Configure structured logging
 structlog.configure(
@@ -72,6 +74,7 @@ class MeetingAssistant:
         # Components (initialised in start())
         self.bot: Optional[BaseMeetingBot] = None
         self.caption_scraper: Optional[CaptionScraper] = None
+        self.realtime_server: Optional[RealtimeTranscriptServer] = None
         self.context_engine: Optional[ContextEngine] = None
         self.trigger_engine: Optional[TriggerEngine] = None
         self.llm_service: Optional[LLMService] = None
@@ -145,8 +148,23 @@ class MeetingAssistant:
                     logger.error("no_page_for_captions")
 
             else:
-                # Teams / Zoom: use Recall.ai (managed API + polling)
-                # No webhook server needed — bot polls transcript API directly
+                # Teams / Zoom: use Recall.ai (managed API)
+                # Start real-time WebSocket server if tunnel URL is configured
+                if config.recall.realtime_url:
+                    try:
+                        self.realtime_server = RealtimeTranscriptServer(
+                            port=config.recall.realtime_ws_port,
+                            callback=self._on_transcript_chunk,
+                        )
+                        await self.realtime_server.start()
+                        print(f"🌐 Tunnel URL: {config.recall.realtime_url}")
+                    except Exception as e:
+                        logger.error("realtime_server_start_failed", error=str(e))
+                        print(f"⚠️  Real-time server failed: {e}")
+                        print("   Falling back to post-meeting transcript")
+                        self.realtime_server = None
+
+                # Set polling fallback callback
                 self.bot.set_transcript_callback(self._on_transcript_chunk)
 
                 joined = await self.bot.join(self.meeting_url)
@@ -184,6 +202,9 @@ class MeetingAssistant:
 
         if self.caption_scraper:
             await self.caption_scraper.stop()
+
+        if self.realtime_server:
+            await self.realtime_server.stop()
 
         if self.bot:
             await self.bot.leave()
@@ -303,14 +324,41 @@ class MeetingAssistant:
 async def run_assistant(meeting_url: str):
     """Run the meeting assistant until interrupted."""
     assistant = MeetingAssistant(meeting_url)
+
+    # Set up signal handler for graceful shutdown
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler():
+        print("\n⏹️  Shutting down...")
+        shutdown_event.set()
+
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, _signal_handler)
+        loop.add_signal_handler(signal.SIGTERM, _signal_handler)
+    except NotImplementedError:
+        # Windows doesn't support add_signal_handler for SIGINT
+        pass
+
     try:
         await assistant.start()
-        while assistant._running:
+
+        # Wait until stopped or signal received
+        while assistant._running and not shutdown_event.is_set():
             await asyncio.sleep(1)
+
     except KeyboardInterrupt:
         logger.info("interrupted_by_user")
+    except Exception as e:
+        logger.error("assistant_error", error=str(e))
     finally:
-        await assistant.stop()
+        print("🛑 Cleaning up...")
+        try:
+            await asyncio.wait_for(assistant.stop(), timeout=15)
+        except asyncio.TimeoutError:
+            print("⚠️  Cleanup timed out — bot will leave via atexit")
+        except Exception as e:
+            logger.error("cleanup_error", error=str(e))
 
 
 async def run_simulation():

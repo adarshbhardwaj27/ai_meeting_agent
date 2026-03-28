@@ -137,6 +137,13 @@ class RecallConfig:
             "RECALL_TRANSCRIPTION_PROVIDER", "meeting_captions"
         )
     )
+    # Real-time transcript via WebSocket (requires a tunnel)
+    realtime_url: Optional[str] = field(
+        default_factory=lambda: os.getenv("RECALL_REALTIME_URL")
+    )
+    realtime_ws_port: int = field(
+        default_factory=lambda: int(os.getenv("RECALL_REALTIME_WS_PORT", "8766"))
+    )
 
 
 @dataclass
