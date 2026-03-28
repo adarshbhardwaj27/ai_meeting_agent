@@ -224,6 +224,15 @@ class TriggerType(Enum):
     RISK_OVERLOOKED = "risk_overlooked"
     CIRCULAR_DISCUSSION = "circular_discussion"
 
+    # Voice-addressed question (someone said the bot's name out loud)
+    VOICE_ADDRESS = "voice_address"
+
+    # Intelligence-layer signals (Tier 1 → Tier 2)
+    CONTRADICTION = "contradiction"
+    MEMORY_GAP = "memory_gap"
+    FACTUAL_INCONSISTENCY = "factual_inconsistency"
+    COLLABORATION_OPPORTUNITY = "collaboration_opportunity"
+
 
 class CommandType(Enum):
     SUMMARIZE = "summarize"
@@ -253,6 +262,12 @@ class Trigger:
     
     # Related context
     relevant_transcript: str = ""
+
+    # Signal evidence (populated by Tier-1 intelligence layer)
+    signal_evidence_a: Optional[str] = None
+    signal_evidence_b: Optional[str] = None
+    signal_speaker_a: Optional[str] = None
+    signal_speaker_b: Optional[str] = None
     
     @classmethod
     def create_command(cls, command_type: CommandType, 
@@ -381,3 +396,68 @@ class Event:
             timestamp=datetime.now(),
             payload=payload
         )
+
+
+# =============================================================================
+# Conversation Intelligence Models
+# =============================================================================
+
+class SignalType(Enum):
+    """Types of conversational signals the intelligence layer can detect."""
+    CONTRADICTION = "contradiction"           # X said A, now Y says not-A
+    MEMORY_GAP = "memory_gap"                 # Team forgot / can't recall earlier point
+    FACTUAL_INCONSISTENCY = "factual_inconsistency"  # Stated fact conflicts with prior data
+    COLLABORATION_OPPORTUNITY = "collaboration_opportunity"  # Bot has useful context to add
+
+
+@dataclass
+class AssertionRecord:
+    """
+    A factual claim extracted from the transcript.
+
+    The assertion ledger tracks what each participant has stated as fact
+    so contradictions and memory gaps can be detected without an LLM call.
+    """
+    id: str
+    text: str                       # The normalized claim
+    speaker: Optional[str]
+    timestamp: datetime
+    keywords: Set[str] = field(default_factory=set)   # Content words for fast overlap
+    negated: bool = False           # "we should NOT use X"
+    superseded_by: Optional[str] = None  # ID of a later assertion that updates this one
+
+    @classmethod
+    def create(
+        cls,
+        text: str,
+        speaker: Optional[str] = None,
+        keywords: Optional[Set[str]] = None,
+        negated: bool = False,
+    ) -> "AssertionRecord":
+        return cls(
+            id=str(uuid.uuid4()),
+            text=text,
+            speaker=speaker,
+            timestamp=datetime.now(),
+            keywords=keywords or set(),
+            negated=negated,
+        )
+
+
+@dataclass
+class SignalCandidate:
+    """
+    A lightweight candidate produced by Tier-1 local scoring.
+
+    Only candidates above the confidence threshold are escalated to the LLM
+    (Tier 2) for response generation.
+    """
+    signal_type: SignalType
+    confidence: float                     # 0.0 – 1.0
+    reason: str                           # Human-readable explanation
+    evidence_a: Optional[str] = None      # First piece of evidence (e.g. earlier claim)
+    evidence_b: Optional[str] = None      # Second piece (e.g. current claim)
+    speaker_a: Optional[str] = None
+    speaker_b: Optional[str] = None
+    related_assertion_ids: List[str] = field(default_factory=list)
+    relevant_transcript: str = ""

@@ -15,10 +15,12 @@ from unittest.mock import Mock, AsyncMock, patch
 # Import components
 from src.context.models import (
     TranscriptChunk, MeetingContext, Concern, Decision,
-    Trigger, TriggerType, CommandType, ConcernSeverity, DecisionStatus
+    Trigger, TriggerType, CommandType, ConcernSeverity, DecisionStatus, Topic,
+    SignalType, SignalCandidate, AssertionRecord,
 )
 from src.context.context_engine import ContextEngine
 from src.triggers.trigger_engine import TriggerEngine
+from src.triggers.conversation_intelligence import ConversationIntelligence
 
 
 # =============================================================================
@@ -265,6 +267,56 @@ class TestTriggerEngine:
         # Should not trigger for random conversation
         assert len(triggers) == 0
 
+    @pytest.mark.asyncio
+    async def test_detect_topic_drift_from_context_shift(self, trigger_engine, mock_context):
+        """Test that topic drift is detected from context misalignment, not cue phrases."""
+        mock_context.current_topic = Topic(
+            name="Real-time notification architecture",
+            started_at=datetime.now() - timedelta(minutes=4)
+        )
+
+        chunk = TranscriptChunk(
+            text=(
+                "We should compare hotel options, travel approvals, venue budget, "
+                "and the offsite catering plan before Friday."
+            ),
+            timestamp=datetime.now(),
+            speaker="John"
+        )
+        mock_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=mock_context,
+            new_chunks=[chunk]
+        )
+
+        assert any(trigger.type == TriggerType.TOPIC_DRIFT for trigger in triggers)
+
+    @pytest.mark.asyncio
+    async def test_no_topic_drift_when_conversation_matches_active_focus(self, trigger_engine, mock_context):
+        """Test that active-topic discussion stays below the drift threshold."""
+        mock_context.current_topic = Topic(
+            name="Real-time notification architecture",
+            started_at=datetime.now() - timedelta(minutes=4)
+        )
+
+        chunk = TranscriptChunk(
+            text=(
+                "We still need the notification architecture to handle latency, "
+                "scaling, and delivery guarantees for the real-time pipeline."
+            ),
+            timestamp=datetime.now(),
+            speaker="Sarah"
+        )
+        mock_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=mock_context,
+            new_chunks=[chunk]
+        )
+
+        assert all(trigger.type != TriggerType.TOPIC_DRIFT for trigger in triggers)
+
 
 # =============================================================================
 # Model Tests
@@ -348,6 +400,406 @@ class TestModels:
         assert len(context.unaddressed_concerns) == 2
         assert len(context.high_priority_concerns) == 1
         assert context.meeting_duration.total_seconds() >= 30 * 60
+
+
+# =============================================================================
+# Conversation Intelligence Tests
+# =============================================================================
+
+class TestConversationIntelligence:
+    """Tests for the Tier-1 local signal scorer."""
+
+    @pytest.fixture
+    def intel(self):
+        return ConversationIntelligence()
+
+    @pytest.fixture
+    def base_context(self):
+        return MeetingContext(
+            meeting_id="intel_test",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+    # ── Contradiction detection ──────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_detect_contradiction_across_speakers(self, intel, base_context):
+        """When speaker B negates what speaker A asserted, fire a contradiction."""
+        earlier = [
+            TranscriptChunk(
+                text="Kafka can easily meet our 100ms SLA.",
+                timestamp=datetime.now() - timedelta(minutes=3),
+                speaker="Mike",
+            )
+        ]
+        # Feed earlier statement into the ledger
+        intel.score_signals(context=base_context, new_chunks=earlier)
+
+        later = [
+            TranscriptChunk(
+                text="Kafka cannot meet our 100ms SLA, the batching adds too much latency.",
+                timestamp=datetime.now(),
+                speaker="Sarah",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=later)
+
+        contradictions = [s for s in signals if s.signal_type == SignalType.CONTRADICTION]
+        assert len(contradictions) >= 1
+        assert contradictions[0].confidence >= 0.55
+        assert contradictions[0].speaker_a == "Mike"
+        assert contradictions[0].speaker_b == "Sarah"
+
+    @pytest.mark.asyncio
+    async def test_no_contradiction_for_same_speaker_self_correction(self, intel, base_context):
+        """Same speaker updating their own view should NOT fire a contradiction."""
+        earlier = [
+            TranscriptChunk(
+                text="I think we should use Redis for caching.",
+                timestamp=datetime.now() - timedelta(minutes=2),
+                speaker="John",
+            )
+        ]
+        intel.score_signals(context=base_context, new_chunks=earlier)
+
+        later = [
+            TranscriptChunk(
+                text="Actually we should not use Redis for caching, Memcached is better.",
+                timestamp=datetime.now(),
+                speaker="John",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=later)
+
+        contradictions = [s for s in signals if s.signal_type == SignalType.CONTRADICTION]
+        assert len(contradictions) == 0
+
+    # ── Memory gap detection ─────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_detect_memory_gap_with_matching_context(self, intel, base_context):
+        """When someone asks 'does anyone remember X' and the bot has X, fire memory gap."""
+        # Seed the assertion ledger with an earlier statement
+        earlier = [
+            TranscriptChunk(
+                text="Our database migration deadline is March 15th.",
+                timestamp=datetime.now() - timedelta(minutes=5),
+                speaker="Sarah",
+            )
+        ]
+        intel.score_signals(context=base_context, new_chunks=earlier)
+
+        later = [
+            TranscriptChunk(
+                text="Does anyone remember when the database migration deadline was?",
+                timestamp=datetime.now(),
+                speaker="John",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=later)
+
+        memory_gaps = [s for s in signals if s.signal_type == SignalType.MEMORY_GAP]
+        assert len(memory_gaps) >= 1
+        assert "database" in memory_gaps[0].evidence_a.lower() or "migration" in memory_gaps[0].evidence_a.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_memory_gap_without_recall_language(self, intel, base_context):
+        """Normal speech without recall phrases should not fire memory gap."""
+        earlier = [
+            TranscriptChunk(
+                text="The sprint ends on Friday.",
+                timestamp=datetime.now() - timedelta(minutes=3),
+                speaker="Mike",
+            )
+        ]
+        intel.score_signals(context=base_context, new_chunks=earlier)
+
+        later = [
+            TranscriptChunk(
+                text="Let's plan our tasks for the rest of the sprint.",
+                timestamp=datetime.now(),
+                speaker="Sarah",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=later)
+
+        memory_gaps = [s for s in signals if s.signal_type == SignalType.MEMORY_GAP]
+        assert len(memory_gaps) == 0
+
+    # ── Collaboration opportunity ────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_detect_collaboration_when_concern_overlaps_speech(self, intel, base_context):
+        """When current speech overlaps an old unaddressed concern, fire collaboration."""
+        # Add an old concern to context
+        concern = Concern.create(
+            description="Latency issues with Kafka message batching",
+            raised_by="Sarah",
+            severity=ConcernSeverity.HIGH,
+        )
+        concern.raised_at = datetime.now() - timedelta(minutes=5)
+        base_context.concerns_raised.append(concern)
+
+        chunks = [
+            TranscriptChunk(
+                text="I think Kafka message batching is the right approach for throughput.",
+                timestamp=datetime.now(),
+                speaker="Mike",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=chunks)
+
+        collabs = [s for s in signals if s.signal_type == SignalType.COLLABORATION_OPPORTUNITY]
+        assert len(collabs) >= 1
+        assert "latency" in collabs[0].reason.lower() or "kafka" in collabs[0].reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_collaboration_for_very_recent_concern(self, intel, base_context):
+        """A concern raised < 2 min ago should NOT fire collaboration (still fresh)."""
+        concern = Concern.create(
+            description="Database scaling problems",
+            raised_by="John",
+            severity=ConcernSeverity.MEDIUM,
+        )
+        concern.raised_at = datetime.now() - timedelta(seconds=30)
+        base_context.concerns_raised.append(concern)
+
+        chunks = [
+            TranscriptChunk(
+                text="We need to think about database scaling right now.",
+                timestamp=datetime.now(),
+                speaker="Sarah",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=chunks)
+
+        collabs = [s for s in signals if s.signal_type == SignalType.COLLABORATION_OPPORTUNITY]
+        assert len(collabs) == 0
+
+    # ── End-to-end: intelligence signals through TriggerEngine ───────
+
+    @pytest.mark.asyncio
+    async def test_contradiction_promoted_to_trigger(self):
+        """A contradiction signal should be promoted to a CONTRADICTION trigger."""
+        trigger_engine = TriggerEngine()
+
+        context = MeetingContext(
+            meeting_id="promo_test",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        # Feed earlier claim
+        earlier_chunk = TranscriptChunk(
+            text="Our API supports up to 500 requests per second.",
+            timestamp=datetime.now() - timedelta(minutes=3),
+            speaker="Mike",
+        )
+        context.recent_transcript.append(earlier_chunk)
+        await trigger_engine.check_for_triggers(
+            context=context, new_chunks=[earlier_chunk]
+        )
+
+        # Feed contradicting claim from different speaker
+        later_chunk = TranscriptChunk(
+            text="Our API does not support more than 200 requests per second.",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        context.recent_transcript.append(later_chunk)
+        triggers = await trigger_engine.check_for_triggers(
+            context=context, new_chunks=[later_chunk]
+        )
+
+        contradiction_triggers = [t for t in triggers if t.type == TriggerType.CONTRADICTION]
+        assert len(contradiction_triggers) >= 1
+        assert contradiction_triggers[0].signal_evidence_a is not None
+
+    @pytest.mark.asyncio
+    async def test_memory_gap_promoted_to_trigger(self):
+        """A memory-gap signal should be promoted to a MEMORY_GAP trigger."""
+        trigger_engine = TriggerEngine()
+
+        context = MeetingContext(
+            meeting_id="memory_test",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        earlier_chunk = TranscriptChunk(
+            text="The deployment window is Thursday 2am to 6am.",
+            timestamp=datetime.now() - timedelta(minutes=5),
+            speaker="Sarah",
+        )
+        context.recent_transcript.append(earlier_chunk)
+        await trigger_engine.check_for_triggers(
+            context=context, new_chunks=[earlier_chunk]
+        )
+
+        later_chunk = TranscriptChunk(
+            text="Does anyone remember when the deployment window is?",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        context.recent_transcript.append(later_chunk)
+        triggers = await trigger_engine.check_for_triggers(
+            context=context, new_chunks=[later_chunk]
+        )
+
+        memory_triggers = [t for t in triggers if t.type == TriggerType.MEMORY_GAP]
+        assert len(memory_triggers) >= 1
+
+
+# =============================================================================
+# Voice-Address Tests
+# =============================================================================
+
+class TestVoiceAddress:
+    """Tests for voice-mention detection (someone says the bot's name out loud)."""
+
+    @pytest.fixture
+    def trigger_engine(self):
+        return TriggerEngine()
+
+    @pytest.fixture
+    def base_context(self):
+        return MeetingContext(
+            meeting_id="voice_test",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_voice_mention_with_full_question(self, trigger_engine, base_context):
+        """'Alex, can you summarize?' in a single transcript chunk fires VOICE_ADDRESS."""
+        chunk = TranscriptChunk(
+            text="Alex, can you summarize what we discussed so far?",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.SUMMARIZE
+
+    @pytest.mark.asyncio
+    async def test_voice_mention_hey_prefix(self, trigger_engine, base_context):
+        """'Hey Alex, what are the risks?' detects both name and known command."""
+        chunk = TranscriptChunk(
+            text="Hey Alex, what are the risks here?",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.RISKS
+
+    @pytest.mark.asyncio
+    async def test_voice_mention_freeform_question(self, trigger_engine, base_context):
+        """A question that doesn't match a known command gets CUSTOM type."""
+        chunk = TranscriptChunk(
+            text="Alex, do you think we should postpone the migration?",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.CUSTOM
+        assert "postpone" in triggers[0].relevant_transcript.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_mention_multi_chunk_buffering(self, trigger_engine, base_context):
+        """Name in chunk 1, question in chunk 2 — should still fire."""
+        chunk1 = TranscriptChunk(
+            text="Alex,",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        base_context.recent_transcript.append(chunk1)
+
+        # First call: starts buffering
+        triggers1 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk1]
+        )
+        assert len(triggers1) == 0  # Not enough text yet
+
+        chunk2 = TranscriptChunk(
+            text="what are the action items from today?",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        base_context.recent_transcript.append(chunk2)
+
+        # Second call: buffer completes
+        triggers2 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk2]
+        )
+
+        assert len(triggers2) == 1
+        assert triggers2[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers2[0].command_type == CommandType.ACTION_ITEMS
+
+    @pytest.mark.asyncio
+    async def test_no_trigger_when_name_mentioned_in_passing(self, trigger_engine, base_context):
+        """Mentioning the name without a question/request should NOT trigger."""
+        chunk = TranscriptChunk(
+            text="I think Alex would agree with that approach.",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        voice_triggers = [t for t in triggers if t.type == TriggerType.VOICE_ADDRESS]
+        assert len(voice_triggers) == 0
+
+    @pytest.mark.asyncio
+    async def test_voice_takes_priority_over_proactive(self, trigger_engine, base_context):
+        """Voice-addressed question should return immediately, skipping proactive checks."""
+        # Add context that would normally trigger proactive signals
+        concern = Concern.create(
+            description="Database scaling problems",
+            raised_by="John",
+            severity=ConcernSeverity.HIGH,
+        )
+        concern.raised_at = datetime.now() - timedelta(minutes=5)
+        base_context.concerns_raised.append(concern)
+
+        chunk = TranscriptChunk(
+            text="Alex, summarize the database scaling discussion",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        # Should get exactly 1 trigger (voice), not additional proactive ones
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
 
 
 # =============================================================================

@@ -96,6 +96,12 @@ class TriggerConfig:
     enable_proactive: bool = field(
         default_factory=lambda: os.getenv("ENABLE_PROACTIVE_MESSAGES", "true").lower() == "true"
     )
+    topic_drift_similarity_threshold: float = field(
+        default_factory=lambda: float(os.getenv("TOPIC_DRIFT_SIMILARITY_THRESHOLD", "0.18"))
+    )
+    topic_drift_min_tokens: int = field(
+        default_factory=lambda: int(os.getenv("TOPIC_DRIFT_MIN_TOKENS", "8"))
+    )
 
 
 @dataclass

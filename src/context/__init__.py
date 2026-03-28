@@ -17,6 +17,9 @@ from src.context.models import (
     ConcernSeverity,
     DecisionStatus,
     MessagePriority,
+    SignalType,
+    SignalCandidate,
+    AssertionRecord,
 )
 from src.context.context_engine import ContextEngine
 
@@ -37,5 +40,8 @@ __all__ = [
     "ConcernSeverity",
     "DecisionStatus",
     "MessagePriority",
+    "SignalType",
+    "SignalCandidate",
+    "AssertionRecord",
     "ContextEngine",
 ]

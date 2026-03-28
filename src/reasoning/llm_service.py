@@ -89,6 +89,55 @@ RULES:
 - Optionally summarize the main positions in one line
 - Suggest a decision approach only if asked
 - Very light touch - they may be working through it""",
+
+    TriggerType.CONTRADICTION: """You are {bot_name}, a silent AI assistant observing a live meeting.
+You noticed that a current statement appears to contradict something said earlier.
+
+RULES:
+- One line quoting both statements neutrally
+- Frame as "Earlier [speaker] mentioned X, just now [speaker] said Y — worth clarifying?"
+- Be genuinely helpful, not gotcha
+- If the contradiction is trivial or self-correction, return SKIP
+- Never take sides""",
+
+    TriggerType.MEMORY_GAP: """You are {bot_name}, a silent AI assistant observing a live meeting.
+Someone is trying to recall something that was discussed earlier, and you have the answer in your context.
+
+RULES:
+- One line with the specific fact they're trying to remember
+- Attribute it: "Earlier [speaker] mentioned …"
+- Be a helpful note-taker, not a know-it-all
+- If you're not confident in the match, return SKIP""",
+
+    TriggerType.FACTUAL_INCONSISTENCY: """You are {bot_name}, a silent AI assistant observing a live meeting.
+Two statements contain different numbers or facts about the same topic.
+
+RULES:
+- One line noting both figures neutrally
+- Frame as "Just checking — earlier the figure was X, now it's Y"
+- Do NOT say which is correct
+- If the difference is insignificant or clearly a rounding, return SKIP""",
+
+    TriggerType.COLLABORATION_OPPORTUNITY: """You are {bot_name}, a silent AI assistant observing a live meeting.
+The current discussion is directly related to an earlier concern, decision, or question that hasn't been addressed yet.
+
+RULES:
+- One line connecting the current discussion to the earlier point
+- Frame as "This may relate to [speaker]'s earlier point about …"
+- Only speak if the connection is genuinely useful
+- If it's obvious they already know, return SKIP""",
+
+    TriggerType.VOICE_ADDRESS: """You are {bot_name}, an AI assistant in a live meeting.
+A participant just said your name out loud and asked you something directly.
+This is a voice question — they are speaking to YOU, not typing in chat.
+
+RULES:
+- Respond as if someone at the table asked you a question
+- Be concise (2-3 lines max) but genuinely helpful
+- Use the full meeting context to give the best answer
+- Address the speaker by name if known
+- Be natural and conversational — this is a spoken interaction, your reply appears in chat
+- If they asked a known command (summarize, risks, etc.) follow that command's format""",
 }
 
 COMMAND_PROMPTS = {
@@ -276,9 +325,19 @@ class LLMService:
         
         if trigger.conflicting_decision:
             parts.append(f"Related Decision: {trigger.conflicting_decision.description}")
+
+        # Signal evidence (from Tier-1 intelligence layer)
+        if trigger.signal_evidence_a or trigger.signal_evidence_b:
+            parts.append("\n=== SIGNAL EVIDENCE ===")
+            if trigger.signal_evidence_a:
+                speaker_a = trigger.signal_speaker_a or "Someone"
+                parts.append(f"Earlier ({speaker_a}): \"{trigger.signal_evidence_a}\"")
+            if trigger.signal_evidence_b:
+                speaker_b = trigger.signal_speaker_b or "Someone"
+                parts.append(f"Now ({speaker_b}): \"{trigger.signal_evidence_b}\"")
         
         # Command-specific instructions
-        if trigger.type == TriggerType.EXPLICIT_COMMAND and trigger.command_type:
+        if trigger.type in (TriggerType.EXPLICIT_COMMAND, TriggerType.VOICE_ADDRESS) and trigger.command_type:
             cmd_prompt = COMMAND_PROMPTS.get(
                 trigger.command_type, 
                 COMMAND_PROMPTS[CommandType.CUSTOM]
@@ -356,10 +415,15 @@ class LLMService:
         """Determine the message priority based on trigger type."""
         priority_map = {
             TriggerType.EXPLICIT_COMMAND: MessagePriority.HIGH,
+            TriggerType.VOICE_ADDRESS: MessagePriority.HIGH,
             TriggerType.CONFLICT_DETECTED: MessagePriority.HIGH,
+            TriggerType.CONTRADICTION: MessagePriority.HIGH,
+            TriggerType.FACTUAL_INCONSISTENCY: MessagePriority.HIGH,
+            TriggerType.MEMORY_GAP: MessagePriority.MEDIUM,
             TriggerType.RISK_OVERLOOKED: MessagePriority.MEDIUM,
             TriggerType.DECISION_FORMING: MessagePriority.MEDIUM,
             TriggerType.CIRCULAR_DISCUSSION: MessagePriority.MEDIUM,
+            TriggerType.COLLABORATION_OPPORTUNITY: MessagePriority.MEDIUM,
             TriggerType.REPEATED_CONFUSION: MessagePriority.LOW,
             TriggerType.TOPIC_DRIFT: MessagePriority.LOW,
             TriggerType.COMPLEX_CONCEPT: MessagePriority.LOW,
