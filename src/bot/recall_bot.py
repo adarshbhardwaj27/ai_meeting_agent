@@ -106,7 +106,10 @@ class RecallBot(BaseMeetingBot):
                     "transcript": {
                         "provider": {
                             "recallai_streaming": {
-                                "language_code": "auto",
+                                # prioritize_low_latency = 1-3 sec delay (vs 3-10 min for prioritize_accuracy)
+                                # Tradeoff: English only, no spelling/profanity filter
+                                "mode": "prioritize_low_latency",
+                                "language_code": "en",
                             }
                         },
                     },

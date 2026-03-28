@@ -147,14 +147,28 @@ class RealtimeTranscriptServer:
             if text and self._callback:
                 from src.context.models import TranscriptChunk
 
+                now = datetime.now()
                 chunk = TranscriptChunk(
                     speaker=speaker,
                     text=text,
-                    timestamp=datetime.now(),
+                    timestamp=now,
                     is_final=is_final,
                 )
                 label = "🎤" if is_final else "💬"
-                print(f"{label} [{speaker}]: {text}")
+                # Show latency from word timestamps if available
+                latency_info = ""
+                if words and words[0].get("end_timestamp"):
+                    end_ts = words[-1].get("end_timestamp", {})
+                    if end_ts and end_ts.get("absolute"):
+                        try:
+                            from datetime import timezone
+                            spoken_at = datetime.fromisoformat(end_ts["absolute"].replace("Z", "+00:00"))
+                            delivered_at = datetime.now(timezone.utc)
+                            latency_sec = (delivered_at - spoken_at).total_seconds()
+                            latency_info = f" ⏱️{latency_sec:.1f}s"
+                        except Exception:
+                            pass
+                print(f"{label} [{speaker}]: {text}{latency_info}")
                 self._callback(chunk)
                 self._total_chunks += 1
 
