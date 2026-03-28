@@ -104,7 +104,9 @@ class RecallBot(BaseMeetingBot):
                 "recording_config": {
                     "transcript": {
                         "provider": {
-                            "meeting_captions": {}
+                            "recallai_streaming": {
+                                "language_code": "auto",
+                            }
                         },
                     },
                 },
@@ -388,14 +390,18 @@ class RecallBot(BaseMeetingBot):
         """
         Poll Recall.ai for new transcript entries.
 
-        Replaces webhook-based real-time transcription — works on any
-        network without ngrok/tunnels. Polls every 2s, emits only new
-        chunks via the transcript callback.
+        Uses the new Recall.ai API:
+        1. GET /bot/{id}/ → recordings[0].id (recording_id)
+        2. GET /transcript/?recording_id={id} → download_url
+        3. Download the transcript JSON and parse new utterances
+
+        Falls back to polling /bot/{id}/ media_shortcuts if available.
         """
         from src.context.models import TranscriptChunk
         from datetime import datetime
 
         last_count = 0
+        recording_id = None
         logger.info("recall_transcript_polling_started")
 
         while self.state == BotState.IN_MEETING:
@@ -405,34 +411,64 @@ class RecallBot(BaseMeetingBot):
                 headers = {"Authorization": f"Token {self._api_key}"}
 
                 async with httpx.AsyncClient(timeout=10) as client:
-                    response = await client.get(
-                        f"{self._api_base}/bot/{self._bot_id}/transcript/",
+                    # Step 1: Get recording_id if we don't have it yet
+                    if not recording_id:
+                        bot_resp = await client.get(
+                            f"{self._api_base}/bot/{self._bot_id}/",
+                            headers=headers,
+                        )
+                        if bot_resp.status_code == 200:
+                            bot_data = bot_resp.json()
+                            recordings = bot_data.get("recordings", [])
+                            if recordings:
+                                recording_id = recordings[0].get("id")
+                                logger.info("recall_recording_found", recording_id=recording_id)
+
+                    if not recording_id:
+                        await asyncio.sleep(3)
+                        continue
+
+                    # Step 2: Get transcript for this recording
+                    transcript_resp = await client.get(
+                        f"{self._api_base}/transcript/?recording_id={recording_id}",
                         headers=headers,
                     )
 
-                    if response.status_code == 200:
-                        data = response.json()
-                        entries = data if isinstance(data, list) else data.get("results", [])
+                    if transcript_resp.status_code == 200:
+                        transcript_data = transcript_resp.json()
+                        results = transcript_data.get("results", [])
 
-                        if len(entries) > last_count:
-                            for entry in entries[last_count:]:
-                                speaker = entry.get("speaker", "Unknown")
-                                words = entry.get("words", [])
-                                text = " ".join(w.get("text", "") for w in words).strip() if words else entry.get("text", "")
+                        if results:
+                            transcript_obj = results[0]
+                            download_url = transcript_obj.get("data", {}).get("download_url")
 
-                                if text and self._transcript_callback:
-                                    chunk = TranscriptChunk(
-                                        speaker=speaker,
-                                        text=text,
-                                        timestamp=datetime.now(),
-                                        is_final=entry.get("is_final", True),
-                                    )
-                                    print(f"🎤 [{speaker}]: {text}")
-                                    self._transcript_callback(chunk)
+                            if download_url:
+                                # Step 3: Download the transcript JSON
+                                dl_resp = await client.get(download_url)
+                                if dl_resp.status_code == 200:
+                                    utterances = dl_resp.json()
+                                    if not isinstance(utterances, list):
+                                        utterances = utterances.get("results", [])
 
-                            last_count = len(entries)
+                                    if len(utterances) > last_count:
+                                        for entry in utterances[last_count:]:
+                                            speaker = entry.get("speaker", entry.get("participant", {}).get("name", "Unknown"))
+                                            words = entry.get("words", [])
+                                            text = " ".join(w.get("text", "") for w in words).strip() if words else entry.get("text", "")
 
-                await asyncio.sleep(2)
+                                            if text and self._transcript_callback:
+                                                chunk = TranscriptChunk(
+                                                    speaker=speaker,
+                                                    text=text,
+                                                    timestamp=datetime.now(),
+                                                    is_final=True,
+                                                )
+                                                print(f"🎤 [{speaker}]: {text}")
+                                                self._transcript_callback(chunk)
+
+                                        last_count = len(utterances)
+
+                await asyncio.sleep(3)
 
             except asyncio.CancelledError:
                 break
