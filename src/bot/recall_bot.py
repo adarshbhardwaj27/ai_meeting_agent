@@ -127,6 +127,7 @@ class RecallBot(BaseMeetingBot):
                     {
                         "type": "websocket",
                         "url": config.recall.realtime_url,
+                        "events": ["transcript.data", "transcript.partial_data"],
                     }
                 ]
                 logger.info(
@@ -226,13 +227,15 @@ class RecallBot(BaseMeetingBot):
             self._set_state(BotState.DISCONNECTED)
             return
 
+        # Use sync httpx — more robust during event loop teardown
+        # (async client raises CancelledError on Ctrl+C)
         try:
             import httpx
 
             headers = {"Authorization": f"Token {self._api_key}"}
 
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
+            with httpx.Client(timeout=15) as client:
+                response = client.post(
                     f"{self._api_base}/bot/{self._bot_id}/leave_call/",
                     headers=headers,
                 )
@@ -249,6 +252,7 @@ class RecallBot(BaseMeetingBot):
         except Exception as e:
             logger.error("recall_leave_error", error=str(e))
 
+        self._bot_id = None
         self._set_state(BotState.DISCONNECTED)
 
     def _leave_sync(self):

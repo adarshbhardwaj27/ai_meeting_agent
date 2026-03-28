@@ -347,7 +347,7 @@ async def run_assistant(meeting_url: str):
         while assistant._running and not shutdown_event.is_set():
             await asyncio.sleep(1)
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("interrupted_by_user")
     except Exception as e:
         logger.error("assistant_error", error=str(e))
@@ -355,7 +355,7 @@ async def run_assistant(meeting_url: str):
         print("🛑 Cleaning up...")
         try:
             await asyncio.wait_for(assistant.stop(), timeout=15)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError):
             print("⚠️  Cleanup timed out — bot will leave via atexit")
         except Exception as e:
             logger.error("cleanup_error", error=str(e))

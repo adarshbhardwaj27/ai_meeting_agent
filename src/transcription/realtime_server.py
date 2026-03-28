@@ -97,46 +97,52 @@ class RealtimeTranscriptServer:
             logger.info("realtime_ws_client_disconnected")
 
     async def _process_message(self, raw_message: str):
-        """Parse a transcript event from Recall.ai and invoke callback."""
+        """
+        Parse a transcript event from Recall.ai and invoke callback.
+
+        Recall.ai real-time event format (from docs):
+        {
+          "event": "transcript.data",
+          "data": {
+            "data": {
+              "words": [{"text": "hello", ...}],
+              "participant": {"id": 1, "name": "John", ...},
+              "language_code": "en"
+            },
+            "bot": {"id": "..."},
+            "recording": {"id": "..."},
+            ...
+          }
+        }
+        """
         try:
             data = json.loads(raw_message)
+            event_type = data.get("event", "")
 
-            # Recall.ai real-time transcript format:
-            # The exact structure depends on the event type.
-            # Transcript events have speaker info + words array.
-            #
-            # Common formats:
-            # {"type": "transcript", "data": {"speaker": "...", "words": [...], "is_final": bool}}
-            # {"transcript": {"speaker": "...", "words": [...], "is_final": bool}}
-            # Or flat: {"speaker": "...", "words": [...], "is_final": bool}
-
-            # Normalise — try multiple possible envelope structures
-            transcript_data = (
-                data.get("data", {}).get("transcript")
-                or data.get("transcript")
-                or data  # flat format
-            )
-
-            if not transcript_data or not isinstance(transcript_data, dict):
-                # Might be a ping/control message — log and skip
-                logger.debug("realtime_non_transcript_message", keys=list(data.keys()))
+            # Only process transcript events
+            if event_type not in ("transcript.data", "transcript.partial_data"):
+                logger.debug(
+                    "realtime_non_transcript_event",
+                    event=event_type,
+                    keys=list(data.keys()),
+                )
                 return
 
-            # Extract speaker
-            speaker = (
-                transcript_data.get("speaker")
-                or transcript_data.get("participant", {}).get("name")
-                or "Unknown"
-            )
+            is_final = event_type == "transcript.data"
 
-            # Extract text from words array or direct text field
-            words = transcript_data.get("words", [])
-            if words:
-                text = " ".join(w.get("text", "") for w in words).strip()
-            else:
-                text = transcript_data.get("text", "").strip()
+            # Navigate: data -> data -> {words, participant}
+            inner = data.get("data", {}).get("data", {})
+            if not inner:
+                logger.warning("realtime_empty_inner_data", event=event_type)
+                return
 
-            is_final = transcript_data.get("is_final", True)
+            # Extract speaker name
+            participant = inner.get("participant") or {}
+            speaker = participant.get("name") or f"Participant {participant.get('id', '?')}"
+
+            # Extract text from words array
+            words = inner.get("words", [])
+            text = " ".join(w.get("text", "") for w in words).strip()
 
             if text and self._callback:
                 from src.context.models import TranscriptChunk
@@ -147,7 +153,8 @@ class RealtimeTranscriptServer:
                     timestamp=datetime.now(),
                     is_final=is_final,
                 )
-                print(f"🎤 [{speaker}]: {text}")
+                label = "🎤" if is_final else "💬"
+                print(f"{label} [{speaker}]: {text}")
                 self._callback(chunk)
                 self._total_chunks += 1
 
