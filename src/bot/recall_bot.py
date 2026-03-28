@@ -273,53 +273,68 @@ class RecallBot(BaseMeetingBot):
         The bot goes through states: ready → joining → in_call_not_recording
         → in_call_recording → ...
         """
-        try:
-            import httpx
+        import httpx
 
-            headers = {"Authorization": f"Token {self._api_key}"}
+        headers = {"Authorization": f"Token {self._api_key}"}
+        consecutive_errors = 0
+        max_consecutive_errors = 5
 
-            for i in range(timeout):
+        for i in range(timeout):
+            try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     response = await client.get(
                         f"{self._api_base}/bot/{self._bot_id}/",
                         headers=headers,
                     )
 
-                    if response.status_code == 200:
-                        data = response.json()
-                        status = data.get("status_changes", [])
-                        current_status = status[-1]["code"] if status else "unknown"
+                if response.status_code == 200:
+                    consecutive_errors = 0  # Reset on success
+                    data = response.json()
+                    status = data.get("status_changes", [])
+                    current_status = status[-1]["code"] if status else "unknown"
 
-                        if current_status in (
-                            "in_call_not_recording",
-                            "in_call_recording",
-                            "recording_done",
-                        ):
-                            logger.info(
-                                "recall_bot_joined",
-                                status=current_status,
-                                waited_seconds=i,
-                            )
-                            return True
+                    if current_status in (
+                        "in_call_not_recording",
+                        "in_call_recording",
+                        "recording_done",
+                    ):
+                        logger.info(
+                            "recall_bot_joined",
+                            status=current_status,
+                            waited_seconds=i,
+                        )
+                        return True
 
-                        if current_status in ("call_ended", "fatal", "done"):
-                            logger.error(
-                                "recall_bot_failed_to_join",
-                                status=current_status,
-                            )
-                            return False
+                    if current_status in ("call_ended", "fatal", "done"):
+                        logger.error(
+                            "recall_bot_failed_to_join",
+                            status=current_status,
+                        )
+                        return False
 
-                        if i % 10 == 0:
-                            print(f"⏳ Waiting for bot to join... (status: {current_status})")
+                    if i % 10 == 0:
+                        print(f"⏳ Waiting for bot to join... (status: {current_status})")
 
-                await asyncio.sleep(1)
+            except Exception as e:
+                consecutive_errors += 1
+                logger.warning(
+                    "recall_poll_error",
+                    error=f"{type(e).__name__}: {e}",
+                    attempt=i,
+                    consecutive_errors=consecutive_errors,
+                )
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(
+                        "recall_wait_for_join_failed",
+                        reason=f"{max_consecutive_errors} consecutive poll errors",
+                    )
+                    return False
+                # Don't bail on a single network hiccup — retry
 
-            logger.error("recall_join_timeout", timeout=timeout)
-            return False
+            await asyncio.sleep(2)
 
-        except Exception as e:
-            logger.error("recall_wait_for_join_error", error=str(e))
-            return False
+        logger.error("recall_join_timeout", timeout=timeout)
+        return False
 
     async def _monitor_chat(self):
         """
