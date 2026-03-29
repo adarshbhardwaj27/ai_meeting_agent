@@ -1,0 +1,43 @@
+{
+  "meeting_id": "voice_multiple_filler_prefixes",
+  "description": "Various natural filler words before 'alex' — all should trigger: yeah alex, but alex, well alex",
+  "tags": ["voice-address", "prefix", "natural-speech"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "yeah alex what do you think about this?",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 1500, "comment": "Wait for main loop to process trigger" },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "what do you think"
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "but alex is that really true?",
+      "is_final": true, "delay_ms": 2000
+    },
+    { "type": "wait", "delay_ms": 1500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "really true"
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "well alex can you double check?",
+      "is_final": true, "delay_ms": 2000
+    },
+    { "type": "wait", "delay_ms": 1500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "double check"
+    }
+  ]
+}

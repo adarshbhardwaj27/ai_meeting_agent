@@ -1,0 +1,37 @@
+{
+  "meeting_id": "voice_question_then_normal_speech",
+  "description": "Speaker asks alex a question, gets response, then keeps talking normally — should NOT trigger again",
+  "tags": ["voice-address", "negative", "post-response"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "alex what framework should we use?",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 1500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "framework"
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "okay thanks for that suggestion",
+      "is_final": true, "delay_ms": 3000,
+      "comment": "Normal speech after the bot responded — no alex mentioned"
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "I think react makes sense for our frontend",
+      "is_final": true, "delay_ms": 1000
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "Normal conversation should not trigger voice_address again"
+    }
+  ]
+}

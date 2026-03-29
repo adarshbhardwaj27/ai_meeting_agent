@@ -1,0 +1,19 @@
+{
+  "meeting_id": "voice_comma_after_name",
+  "description": "Speaker says 'Alex, can you explain...' — comma after name should be handled gracefully",
+  "tags": ["voice-address", "punctuation"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "Alex, can you explain the deployment pipeline?",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "deployment pipeline"
+    }
+  ]
+}

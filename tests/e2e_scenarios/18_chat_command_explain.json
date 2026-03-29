@@ -1,0 +1,23 @@
+{
+  "meeting_id": "chat_command_explain",
+  "description": "User asks @Alex to explain a concept",
+  "tags": ["chat-command", "explain"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "we need to implement a circuit breaker pattern for our microservices",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "chat", "speaker": "John",
+      "text": "@Alex explain what a circuit breaker pattern is",
+      "delay_ms": 1000
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "explicit_command",
+      "command_type": "explain"
+    }
+  ]
+}

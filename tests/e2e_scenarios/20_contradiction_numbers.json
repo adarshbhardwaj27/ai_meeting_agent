@@ -1,0 +1,28 @@
+{
+  "meeting_id": "contradiction_numeric_disagreement",
+  "description": "Two speakers disagree on API latency — one says it IS acceptable, the other says it is NOT acceptable — explicit negation triggers contradiction",
+  "tags": ["contradiction", "intelligence", "numbers"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "Our current API latency is about 200 milliseconds which is acceptable for our users",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "I disagree the latency is not acceptable it is way too slow for production",
+      "is_final": true, "delay_ms": 2000,
+      "comment": "'disagree' and 'not' are negation words — the system detects polarity flip"
+    },
+    {
+      "type": "wait", "delay_ms": 8000,
+      "comment": "Wait for context analysis cycle + contradiction scoring"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "contradiction",
+      "comment": "Two speakers contradicting each other — explicit negation detected"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "meeting_id": "voice_continuation_gains_punctuation",
+  "description": "First chunk has no punctuation (buffer mode), continuation chunk ends with ? — should fire immediately on continuation",
+  "tags": ["voice-address", "punctuation", "continuation"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "alex for the new feature",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "wait", "delay_ms": 1000
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "No punctuation yet — should still be buffering"
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "should we use graphql or rest?",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "graphql",
+      "comment": "Continuation ends with ? — should fire immediately without waiting for settle"
+    }
+  ]
+}

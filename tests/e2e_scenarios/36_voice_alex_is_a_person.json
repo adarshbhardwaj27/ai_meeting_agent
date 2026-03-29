@@ -1,0 +1,25 @@
+{
+  "meeting_id": "voice_alex_is_also_a_person",
+  "description": "KNOWN LIMITATION: 'yeah alex from product team' matches the prefix pattern because 'yeah' is a valid filler and 'alex' follows at the start. The system cannot distinguish 'talking TO the bot' vs 'talking ABOUT someone named Alex' without NLP-level intent detection. This test documents current (expected) behavior.",
+  "tags": ["voice-address", "false-positive", "known-limitation"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "so we talked to the product team yesterday",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "yeah alex from the product team said he will handle the integration",
+      "is_final": true, "delay_ms": 1000,
+      "comment": "This WILL trigger because 'yeah alex ...' matches the prefix pattern — known false positive"
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "comment": "Documents the false positive — system cannot tell 3rd-person references from bot commands"
+    }
+  ]
+}

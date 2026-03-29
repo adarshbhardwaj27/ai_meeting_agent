@@ -1,0 +1,19 @@
+{
+  "meeting_id": "voice_period_ending",
+  "description": "Question ends with . instead of ? — period should also fire immediately",
+  "tags": ["voice-address", "punctuation"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "alex tell me about the deployment schedule.",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "deployment schedule"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "meeting_id": "chat_command_risks",
+  "description": "User sends @Alex what are the risks — should fire explicit_command with RISKS type",
+  "tags": ["chat-command", "risks"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "I think we should migrate the database to postgres next sprint",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "that sounds risky without proper testing",
+      "is_final": true, "delay_ms": 500
+    },
+    {
+      "type": "chat", "speaker": "Sarah",
+      "text": "@Alex what are the risks of this migration?",
+      "delay_ms": 1000
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "explicit_command",
+      "command_type": "risks"
+    }
+  ]
+}

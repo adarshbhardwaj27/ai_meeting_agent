@@ -1,0 +1,19 @@
+{
+  "meeting_id": "voice_punctuation_exclamation",
+  "description": "Question ends with ! instead of ? — exclamation mark should also fire immediately",
+  "tags": ["voice-address", "punctuation", "edge-case"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "alex that is completely wrong!",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "completely wrong"
+    }
+  ]
+}

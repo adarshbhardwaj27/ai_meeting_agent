@@ -1,0 +1,26 @@
+{
+  "meeting_id": "same_speaker_self_correction",
+  "description": "SAME speaker corrects themselves — should NOT fire contradiction (it's a self-correction)",
+  "tags": ["contradiction", "negative", "self-correction"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "The deadline is Friday this week",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "Actually wait no the deadline is not Friday its Monday sorry about that",
+      "is_final": true, "delay_ms": 2000
+    },
+    {
+      "type": "wait", "delay_ms": 8000
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "contradiction",
+      "comment": "Same speaker correcting themselves — not a real contradiction"
+    }
+  ]
+}

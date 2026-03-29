@@ -1,0 +1,43 @@
+{
+  "meeting_id": "voice_interim_flood_then_final",
+  "description": "Flood of interim chunks (real STT behavior: word by word) followed by one final — should fire once",
+  "tags": ["voice-address", "interim", "realistic-stt"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "al",
+      "is_final": false, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex",
+      "is_final": false, "delay_ms": 300
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what",
+      "is_final": false, "delay_ms": 200
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what is",
+      "is_final": false, "delay_ms": 300
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what is the",
+      "is_final": false, "delay_ms": 200
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what is the plan",
+      "is_final": false, "delay_ms": 300
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what is the plan",
+      "is_final": true, "delay_ms": 200,
+      "comment": "Final chunk: same text as last interim"
+    },
+    { "type": "wait", "delay_ms": 3500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "plan"
+    }
+  ]
+}

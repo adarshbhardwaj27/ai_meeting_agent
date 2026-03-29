@@ -1,0 +1,19 @@
+{
+  "meeting_id": "voice_name_at_end",
+  "description": "Someone says 'what do you think alex' — name at END of sentence — must NOT trigger",
+  "tags": ["voice-address", "negative", "false-positive"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "what do you think alex",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "Name at end = rhetorical address, not a command to the bot"
+    }
+  ]
+}

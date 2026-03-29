@@ -1,0 +1,26 @@
+{
+  "meeting_id": "no_contradiction_agreement",
+  "description": "Two speakers AGREE — should NOT trigger contradiction",
+  "tags": ["contradiction", "negative", "agreement"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "I think we should use PostgreSQL for the main database",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I agree PostgreSQL is a good choice for the main database",
+      "is_final": true, "delay_ms": 2000
+    },
+    {
+      "type": "wait", "delay_ms": 8000
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "contradiction",
+      "comment": "Agreement between speakers — no contradiction"
+    }
+  ]
+}

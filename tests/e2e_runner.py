@@ -229,6 +229,7 @@ class E2ERunner:
         try:
             events = scenario.get("events", [])
             responses_before_assert = 0
+            trigger_checkpoint = 0  # index into recent_triggers for "since last assert"
 
             for i, event in enumerate(events):
                 event_type = event.get("type")
@@ -273,7 +274,7 @@ class E2ERunner:
 
                     assertion = self._check_assertion(
                         event, recent_triggers, result.responses_sent,
-                        responses_before_assert
+                        responses_before_assert, trigger_checkpoint
                     )
                     result.assertion_results.append(assertion)
 
@@ -282,8 +283,9 @@ class E2ERunner:
                     if not assertion["passed"]:
                         _print(f"       Detail: {assertion.get('detail', '')}")
 
-                    # If this assert checks triggers, don't reset;
-                    # if it checks responses, update the counter
+                    # Advance checkpoints after each assert so subsequent
+                    # assertions only see NEW triggers / responses.
+                    trigger_checkpoint = len(recent_triggers)
                     if event.get("condition") in ("response_sent", "response_contains"):
                         responses_before_assert = len(result.responses_sent)
 
@@ -314,15 +316,25 @@ class E2ERunner:
         recent_triggers: List[RecordedTrigger],
         all_responses: List[RecordedResponse],
         responses_before: int,
+        trigger_checkpoint: int = 0,
     ) -> Dict[str, Any]:
-        """Check a single assertion event and return result."""
+        """Check a single assertion event and return result.
+
+        ``trigger_checkpoint`` is the index into *recent_triggers* that
+        marks the boundary of "already-checked" triggers.  Assertions
+        only inspect triggers **at or after** the checkpoint so that
+        ``no_trigger`` can coexist with an earlier ``trigger_fired`` in
+        the same scenario.
+        """
         condition = event.get("condition", "")
+        # Slice to only consider triggers since the last checkpoint
+        triggers_since = recent_triggers[trigger_checkpoint:]
 
         if condition == "trigger_fired":
-            return self._assert_trigger_fired(event, recent_triggers)
+            return self._assert_trigger_fired(event, triggers_since)
 
         elif condition == "no_trigger":
-            return self._assert_no_trigger(event, recent_triggers)
+            return self._assert_no_trigger(event, triggers_since)
 
         elif condition == "response_sent":
             new_responses = all_responses[responses_before:]

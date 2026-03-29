@@ -1,0 +1,26 @@
+{
+  "meeting_id": "chat_command_custom_freeform",
+  "description": "User sends a freeform @Alex command that doesn't match summarize/risks/explain — should still fire as custom command",
+  "tags": ["chat-command", "custom"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "we need to plan the next quarter roadmap",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "chat", "speaker": "Sarah",
+      "text": "@Alex list the top priorities for next quarter",
+      "delay_ms": 1000
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "explicit_command"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

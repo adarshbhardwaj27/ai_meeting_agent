@@ -1,0 +1,81 @@
+{
+  "meeting_id": "realistic_full_meeting_flow",
+  "description": "Realistic 2-minute meeting simulation: context building → voice question → response → contradiction → chat command",
+  "tags": ["integration", "realistic", "full-flow"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "alright lets discuss the tech stack for the new microservice",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I was thinking we go with Python and FastAPI for the backend",
+      "is_final": true, "delay_ms": 1500
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "FastAPI is good but I prefer Go for performance critical services",
+      "is_final": true, "delay_ms": 1500
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "the team is more familiar with Python though",
+      "is_final": true, "delay_ms": 1000
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "exactly and Python has better machine learning libraries if we need them later",
+      "is_final": true, "delay_ms": 1500
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "hey alex what are the tradeoffs between Python and Go for this?",
+      "is_final": true, "delay_ms": 2000,
+      "comment": "First voice question to bot"
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "tradeoffs"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "The deployment target is next Friday",
+      "is_final": true, "delay_ms": 3000
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "The deployment is not happening Friday it needs to be pushed to the following Monday",
+      "is_final": true, "delay_ms": 2000,
+      "comment": "Contradiction: John says Friday, Sarah says not Friday"
+    },
+    {
+      "type": "wait", "delay_ms": 8000,
+      "comment": "Wait for intelligence tier to detect contradiction"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "contradiction"
+    },
+    {
+      "type": "chat", "speaker": "John",
+      "text": "@Alex summarize what we decided about the tech stack",
+      "delay_ms": 2000,
+      "comment": "Chat command at the end"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "explicit_command",
+      "command_type": "summarize"
+    }
+  ]
+}

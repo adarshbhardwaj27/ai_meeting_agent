@@ -1,0 +1,42 @@
+{
+  "meeting_id": "three_speakers_chaotic_meeting",
+  "description": "Three speakers talking over each other — only the one who says 'alex' should get a response",
+  "tags": ["multi-speaker", "chaos", "realistic"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "I think we should use kubernetes for deployment",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "no docker compose is simpler and works fine",
+      "is_final": true, "delay_ms": 300
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "alex what would you recommend for our scale?",
+      "is_final": true, "delay_ms": 400
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "but kubernetes gives us auto scaling",
+      "is_final": true, "delay_ms": 500,
+      "comment": "Other speakers keep talking — should not interfere"
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "auto scaling is overkill for a team of five",
+      "is_final": true, "delay_ms": 400
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "recommend",
+      "speaker": "Mike",
+      "comment": "Only Mike's question to alex should fire"
+    }
+  ]
+}

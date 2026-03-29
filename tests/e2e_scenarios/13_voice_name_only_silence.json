@@ -1,0 +1,22 @@
+{
+  "meeting_id": "voice_empty_after_name",
+  "description": "Speaker says 'alex' then goes completely silent — no continuation — should fire with empty/minimal text after 3s",
+  "tags": ["voice-address", "edge-case", "silence"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "alex",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "wait", "delay_ms": 4000,
+      "comment": "Total silence — no continuation at all"
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "Empty buffer — nothing after the name — should NOT fire (nothing to respond to)"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "meeting_id": "voice_back_to_back_different_speakers",
+  "description": "Two different speakers both address alex within seconds — both should get answered",
+  "tags": ["voice-address", "multi-speaker", "back-to-back"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "alex what is the current sprint velocity?",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "sprint velocity",
+      "speaker": "Sarah"
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "alex how many bugs are open right now?",
+      "is_final": true, "delay_ms": 2500
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "bugs",
+      "speaker": "Mike"
+    }
+  ]
+}

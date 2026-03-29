@@ -1,0 +1,26 @@
+{
+  "meeting_id": "voice_only_interim_no_final",
+  "description": "STT sends only interim chunks, never a final — should NOT trigger (interims are heartbeats only)",
+  "tags": ["voice-address", "negative", "interim-only", "edge-case"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex",
+      "is_final": false, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what",
+      "is_final": false, "delay_ms": 300
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh", "text": "alex what is",
+      "is_final": false, "delay_ms": 300
+    },
+    { "type": "wait", "delay_ms": 5000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "No final chunks = STT uncertain, should not trigger"
+    }
+  ]
+}

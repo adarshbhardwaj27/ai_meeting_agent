@@ -1,0 +1,29 @@
+{
+  "meeting_id": "voice_summarize_by_voice",
+  "description": "Speaker says 'alex summarize' by VOICE — should classify as voice_address with summarize command",
+  "tags": ["voice-address", "command-type", "summarize"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "we have been talking for 30 minutes about the database migration",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "alex can you summarize what we discussed?",
+      "is_final": true, "delay_ms": 1000
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "summarize",
+      "comment": "Voice-addressed summarize should fire as voice_address"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

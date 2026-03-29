@@ -1,0 +1,25 @@
+{
+  "meeting_id": "voice_different_speaker_interrupts",
+  "description": "Speaker A starts asking alex a question, Speaker B interrupts with unrelated speech — B should not corrupt A's buffer",
+  "tags": ["voice-address", "multi-speaker", "interruption"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "alex what cloud provider should we use",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "sorry can everyone hear me my mic was muted",
+      "is_final": true, "delay_ms": 800,
+      "comment": "Unrelated speaker — should NOT corrupt the voice buffer"
+    },
+    { "type": "wait", "delay_ms": 3500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "cloud provider"
+    }
+  ]
+}

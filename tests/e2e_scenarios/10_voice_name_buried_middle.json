@@ -1,0 +1,19 @@
+{
+  "meeting_id": "voice_name_buried_in_middle",
+  "description": "Someone says alex in the MIDDLE of a sentence — must NOT trigger (not addressed to bot)",
+  "tags": ["voice-address", "negative", "false-positive"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I was talking to alex yesterday about the deployment",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "Name in middle of sentence = not talking to bot"
+    }
+  ]
+}

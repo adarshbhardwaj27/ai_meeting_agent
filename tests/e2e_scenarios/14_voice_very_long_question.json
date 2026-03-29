@@ -1,0 +1,30 @@
+{
+  "meeting_id": "voice_very_long_question",
+  "description": "Speaker asks an extremely long multi-sentence question — should still buffer and fire correctly",
+  "tags": ["voice-address", "edge-case", "long-input"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "alex so we have this situation where our database is running slow and the team in singapore says they need better performance but the team in london says they want more features",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "and i think the real issue is that nobody has actually measured the current latency so we are all guessing at this point",
+      "is_final": true, "delay_ms": 1500
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "what should we do first to get some real numbers",
+      "is_final": true, "delay_ms": 1500
+    },
+    { "type": "wait", "delay_ms": 3500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "real numbers",
+      "comment": "Long multi-chunk question should all be captured in the buffer"
+    }
+  ]
+}

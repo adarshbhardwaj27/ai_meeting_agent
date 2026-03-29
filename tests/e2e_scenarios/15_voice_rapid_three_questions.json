@@ -1,0 +1,49 @@
+{
+  "meeting_id": "voice_rapid_fire_three_questions",
+  "description": "Speaker asks three questions in quick succession — each should trigger separately",
+  "tags": ["voice-address", "rapid-fire", "stress"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "alex what is the budget?",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "wait", "delay_ms": 500
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "budget"
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "alex who is the project lead?",
+      "is_final": true, "delay_ms": 2000
+    },
+    {
+      "type": "wait", "delay_ms": 500
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "project lead"
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "alex when is the deadline?",
+      "is_final": true, "delay_ms": 2000
+    },
+    {
+      "type": "wait", "delay_ms": 500
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "deadline"
+    }
+  ]
+}

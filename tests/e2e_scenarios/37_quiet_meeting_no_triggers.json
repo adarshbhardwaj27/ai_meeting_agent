@@ -1,0 +1,33 @@
+{
+  "meeting_id": "quiet_meeting_no_triggers",
+  "description": "Normal quiet meeting conversation — nobody mentions alex, no contradictions — zero triggers expected",
+  "tags": ["negative", "quiet-meeting", "baseline"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "Good morning everyone lets get started with the standup",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I worked on the login page yesterday and its almost done",
+      "is_final": true, "delay_ms": 1000
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "I fixed the payment bug and deployed it to staging",
+      "is_final": true, "delay_ms": 1000
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "Great work everyone lets move on to the next item",
+      "is_final": true, "delay_ms": 1000
+    },
+    { "type": "wait", "delay_ms": 5000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "comment": "Normal standup — no bot mention, no contradictions — should be completely silent"
+    }
+  ]
+}

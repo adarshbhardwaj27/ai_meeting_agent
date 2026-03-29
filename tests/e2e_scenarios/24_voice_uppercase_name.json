@@ -1,0 +1,19 @@
+{
+  "meeting_id": "voice_mixed_case_name",
+  "description": "Bot name in different cases — ALEX, Alex, aLeX — all should match (case insensitive)",
+  "tags": ["voice-address", "edge-case", "case-sensitivity"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "ALEX what is the status?",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "status"
+    }
+  ]
+}

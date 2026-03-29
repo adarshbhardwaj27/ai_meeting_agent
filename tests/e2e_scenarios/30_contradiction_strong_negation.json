@@ -1,0 +1,26 @@
+{
+  "meeting_id": "contradiction_strong_negation",
+  "description": "Speaker B uses strong negation words — 'that is wrong', 'absolutely not', 'I disagree'",
+  "tags": ["contradiction", "intelligence", "negation"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "The release should happen on Friday since everything is tested",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "That is wrong the release should not happen on Friday because testing is not complete",
+      "is_final": true, "delay_ms": 2000
+    },
+    {
+      "type": "wait", "delay_ms": 8000,
+      "comment": "Wait for context analysis cycle"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "contradiction"
+    }
+  ]
+}

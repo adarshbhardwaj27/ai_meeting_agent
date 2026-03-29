@@ -1,0 +1,24 @@
+{
+  "meeting_id": "chat_without_at_sign",
+  "description": "User says 'Alex summarize' in chat WITHOUT @-mention — should NOT trigger (must use @Alex)",
+  "tags": ["chat-command", "negative"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "lets wrap up the discussion",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "chat", "speaker": "Sarah",
+      "text": "Alex summarize the meeting please",
+      "delay_ms": 500,
+      "comment": "No @ sign — should be ignored"
+    },
+    { "type": "wait", "delay_ms": 2000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "explicit_command"
+    }
+  ]
+}

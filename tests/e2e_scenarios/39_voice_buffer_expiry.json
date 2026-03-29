@@ -1,0 +1,40 @@
+{
+  "meeting_id": "voice_buffer_expires_at_15s",
+  "description": "Speaker says alex, then very slow trickle of words over 16 seconds — buffer should expire at max-age (15s) and not fire",
+  "tags": ["voice-address", "timing", "expiry", "edge-case"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "alex",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "hmm",
+      "is_final": false, "delay_ms": 4000,
+      "comment": "Heartbeat at 4s"
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "let me think",
+      "is_final": false, "delay_ms": 4000,
+      "comment": "Heartbeat at 8s"
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "umm",
+      "is_final": false, "delay_ms": 4000,
+      "comment": "Heartbeat at 12s"
+    },
+    {
+      "type": "wait", "delay_ms": 4000,
+      "comment": "Total 16s — past the 15s max age"
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "Buffer expired — speaker never actually asked anything meaningful"
+    }
+  ]
+}
