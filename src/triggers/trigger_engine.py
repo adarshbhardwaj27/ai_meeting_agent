@@ -83,7 +83,9 @@ class TriggerEngine:
         self._voice_buffer_speaker: Optional[str] = None
         self._voice_buffer_text: str = ""
         self._voice_buffer_started: Optional[datetime] = None
-        self._voice_buffer_max_age = timedelta(seconds=6)  # max wait for question
+        self._voice_buffer_last_chunk: Optional[datetime] = None  # when last content was appended
+        self._voice_buffer_max_age = timedelta(seconds=15)  # max wait before discarding
+        self._voice_settle_time  = timedelta(seconds=3)    # silence gap → speaker is done
 
         # Decision language patterns
         self._decision_patterns = [
@@ -208,11 +210,12 @@ class TriggerEngine:
                 return triggers
         
         # 1.5  Check for voice mentions in transcript ("Hey Alex, ...")
-        if new_chunks:
-            voice_trigger = self._check_for_voice_mention(new_chunks, context)
-            if voice_trigger:
-                triggers.append(voice_trigger)
-                return triggers  # Voice-addressed questions take priority
+        #       Always run — even with no new chunks the settle-timer may flush
+        #       the buffer from a previous cycle.
+        voice_trigger = self._check_for_voice_mention(new_chunks or [], context)
+        if voice_trigger:
+            triggers.append(voice_trigger)
+            return triggers  # Voice-addressed questions take priority
 
         # Skip proactive triggers if disabled
         if not self.enable_proactive:
@@ -306,35 +309,21 @@ class TriggerEngine:
     # ── Voice-mention detection ────────────────────────────────────
 
     def _build_voice_mention_patterns(self) -> List[re.Pattern]:
-        """Build patterns that match someone verbally *addressing* the bot.
+        """Build a simple pattern to detect when someone says the bot's name.
 
-        We need to distinguish addressing ("Alex, summarize") from
-        mentioning ("I think Alex would agree").  We use these signals:
-          1. Greeting prefix:     "Hey Alex ..."  / "Hi Alex ..."
-          2. Comma / colon:       "Alex, what ..."  / "Alex: summarize"
-          3. @ prefix:            "@Alex summarize"
-          4. Name + question word: "Alex can you ..." / "Alex what are ..."
+        Just one rule: if the text starts with the bot's name (with an
+        optional greeting prefix like 'hey'), it's addressed to us.
+        Everything after the name is captured and buffered.
+
+        We DON'T try to parse the grammar of what follows.  Instead we
+        buffer all subsequent speech and fire after 3 s of silence.
         """
         name = re.escape(self.bot_name)
         return [
-            # Pattern A: greeting prefix  (hey/hi/yo/ok + name)
+            # Name at start, with optional greeting prefix and punctuation
+            # Matches: "alex ...", "hey alex ...", "hi alex, ...", "alex"
             re.compile(
-                rf"(?:^|\b)(?:hey|hi|yo|ok)\s+{name}[,:\s]*(.+)?",
-                re.IGNORECASE,
-            ),
-            # Pattern B: @mention
-            re.compile(
-                rf"@{name}[,:\s]*(.+)?",
-                re.IGNORECASE,
-            ),
-            # Pattern C: name followed by comma or colon  (direct address)
-            re.compile(
-                rf"(?:^|\b){name}\s*[,:]\s*(.+)?",
-                re.IGNORECASE,
-            ),
-            # Pattern D: name at sentence start followed by question/request word
-            re.compile(
-                rf"^{name}\s+((?:can|could|what|would|should|do|does|will|is|are|tell|give|list|help|explain|summarize|please)\b.+)",
+                rf"^(?:(?:hey|hi|yo|ok)\s+)?{name}[,:\s]*(.*)",
                 re.IGNORECASE,
             ),
         ]
@@ -345,86 +334,122 @@ class TriggerEngine:
         context: MeetingContext,
     ) -> Optional[Trigger]:
         """
-        Detect when someone says the bot's name in speech and extract the
-        question / request that follows.
+        Detect when someone says the bot's name out loud and collect
+        everything they say afterwards.
 
-        Because transcription arrives in chunks, the name and the question
-        may land in different chunks.  We use a small accumulation buffer:
-
-          Chunk 1:  "Hey Alex,"          → start buffering
-          Chunk 2:  "what are the risks?" → flush buffer → fire trigger
-
-        If no continuation arrives within _voice_buffer_max_age, the buffer
-        is discarded (they just said the name in passing).
+        Simple rule: name at start of speech = talking to the bot.
+        Buffer all subsequent speech (final + interim chunks keep the
+        buffer alive).  Fire when:
+          a) Punctuation at end (STT endpointed the sentence), OR
+          b) 3 seconds of true silence (no chunks at all).
+        Discard if 15 s pass with no meaningful content.
         """
         now = datetime.now()
 
-        # ── Expire stale buffer ─────────────────────────────────────
+        # ── 1. Expire stale buffer (max age exceeded) ──────────────
         if (
             self._voice_buffer_started
             and (now - self._voice_buffer_started) > self._voice_buffer_max_age
         ):
             logger.debug("voice_buffer_expired", text=self._voice_buffer_text[:60])
-            self._voice_buffer_speaker = None
-            self._voice_buffer_text = ""
-            self._voice_buffer_started = None
+            self._clear_voice_buffer()
 
+        # ── 2. Process incoming chunks FIRST ────────────────────────
+        #    We must process chunks before checking the settle timer
+        #    because interim chunks reset the settle clock.
         for chunk in chunks:
-            if not chunk.is_final:
-                continue
             text = chunk.text.strip()
+
+            # Interim (non-final) chunks = "speaker is still talking".
+            # Don't add their text (it'll be superseded by the final),
+            # but reset the settle clock so we don't fire prematurely
+            # during stutters, "ummm", or thinking pauses.
+            if not chunk.is_final:
+                if self._voice_buffer_started and text:
+                    self._voice_buffer_last_chunk = now
+                    logger.debug(
+                        "voice_buffer_heartbeat",
+                        interim_text=text[:40],
+                        speaker=chunk.speaker,
+                    )
+                continue
+
             if not text:
                 continue
 
-            # ── Check if this chunk contains the bot's name ─────────
+            # ── Does this chunk contain the bot's name? ─────────────
             matched_name = False
             for pattern in self._voice_mention_patterns:
                 match = pattern.search(text)
                 if match:
                     matched_name = True
-                    after_name = match.group(1).strip() if match.group(1) else ""
-                    if self._is_complete_question(after_name):
-                        # Full question in one chunk
+                    after_name = (match.group(1) or "").strip()
+
+                    # Punctuation = STT already endpointed → fire now.
+                    if after_name and after_name[-1] in "?.!":
+                        self._clear_voice_buffer()
                         return self._create_voice_trigger(
                             speaker=chunk.speaker,
                             question_text=after_name,
                             context=context,
                         )
-                    else:
-                        # Start buffering — question may continue in next chunk
-                        self._voice_buffer_speaker = chunk.speaker
-                        self._voice_buffer_text = after_name
-                        self._voice_buffer_started = now
-                    break  # Only match once per chunk
 
-            # ── If we're buffering and this chunk didn't contain the name,
-            #    append it as continuation of the question ───────────────
+                    # Otherwise start (or restart) the buffer.
+                    self._voice_buffer_speaker = chunk.speaker
+                    self._voice_buffer_text = after_name
+                    self._voice_buffer_started = now
+                    self._voice_buffer_last_chunk = now
+                    content_added_this_cycle = True
+                    break  # one match per chunk
+
+            # ── Continuation of an already-buffered question ────────
             if not matched_name and self._voice_buffer_started:
                 self._voice_buffer_text += " " + text
-                if self._is_complete_question(self._voice_buffer_text):
+                self._voice_buffer_last_chunk = now
+                content_added_this_cycle = True
+
+                # Punctuation in the continuation → fire immediately.
+                if self._voice_buffer_text.strip()[-1:] in ("?", ".", "!"):
                     trigger = self._create_voice_trigger(
                         speaker=self._voice_buffer_speaker or chunk.speaker,
                         question_text=self._voice_buffer_text.strip(),
                         context=context,
                     )
-                    self._voice_buffer_speaker = None
-                    self._voice_buffer_text = ""
-                    self._voice_buffer_started = None
+                    self._clear_voice_buffer()
                     return trigger
+
+        # ── 3. Check settle timer AFTER processing chunks ───────────
+        #    If no chunks arrived (or only interim), check if the speaker
+        #    has been quiet long enough to flush the buffer.
+        if (
+            self._voice_buffer_started
+            and self._voice_buffer_text.strip()
+            and self._voice_buffer_last_chunk
+            and (now - self._voice_buffer_last_chunk) >= self._voice_settle_time
+        ):
+            logger.debug(
+                "voice_buffer_settled",
+                text=self._voice_buffer_text[:60],
+                settle_secs=round(
+                    (now - self._voice_buffer_last_chunk).total_seconds(), 2
+                ),
+            )
+            trigger = self._create_voice_trigger(
+                speaker=self._voice_buffer_speaker,
+                question_text=self._voice_buffer_text.strip(),
+                context=context,
+            )
+            self._clear_voice_buffer()
+            return trigger
 
         return None
 
-    def _is_complete_question(self, text: str) -> bool:
-        """Heuristic: does the text look like a complete question/request?"""
-        text = text.strip()
-        if not text:
-            return False
-        # Ends with punctuation
-        if text[-1] in "?.!":
-            return True
-        # Has enough words to be a real request ("summarize" vs "uh")
-        words = text.split()
-        return len(words) >= 3
+    def _clear_voice_buffer(self):
+        """Reset all voice-buffer state."""
+        self._voice_buffer_speaker = None
+        self._voice_buffer_text = ""
+        self._voice_buffer_started = None
+        self._voice_buffer_last_chunk = None
 
     def _create_voice_trigger(
         self,

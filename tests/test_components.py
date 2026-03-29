@@ -758,6 +758,168 @@ class TestVoiceAddress:
         assert triggers2[0].command_type == CommandType.ACTION_ITEMS
 
     @pytest.mark.asyncio
+    async def test_voice_mention_name_alone_then_question(self, trigger_engine, base_context):
+        """'Alex' as standalone chunk, then question in next final chunk.
+
+        Real STT often finalizes the name as its own utterance:
+          🎤 'alex'
+          💬 'do you know'  (interim)
+          💬 'do you know who is the prime minister of india'  (interim)
+          🎤 'do you know who is the prime minister of india'  (final)
+        """
+        chunk1 = TranscriptChunk(
+            text="alex",
+            timestamp=datetime.now(),
+            speaker="Adarsh",
+            is_final=True,
+        )
+        base_context.recent_transcript.append(chunk1)
+
+        triggers1 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk1]
+        )
+        assert len(triggers1) == 0  # Just the name — buffer started
+
+        # Interim chunks keep the buffer alive
+        interim = TranscriptChunk(
+            text="do you know who is the",
+            timestamp=datetime.now(),
+            speaker="Adarsh",
+            is_final=False,
+        )
+        await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[interim]
+        )
+
+        # Final chunk with the full question
+        chunk2 = TranscriptChunk(
+            text="do you know who is the prime minister of india",
+            timestamp=datetime.now(),
+            speaker="Adarsh",
+            is_final=True,
+        )
+        base_context.recent_transcript.append(chunk2)
+
+        # No punctuation, so won't fire yet — need settle time
+        triggers2 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk2]
+        )
+        assert len(triggers2) == 0
+
+        # Simulate silence (settle time elapsed — 3s threshold)
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+
+        triggers3 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+        assert len(triggers3) == 1
+        assert triggers3[0].type == TriggerType.VOICE_ADDRESS
+        assert "prime minister" in triggers3[0].relevant_transcript.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_mention_trailing_incomplete_word(self, trigger_engine, base_context):
+        """'Alex do you currently' should NOT fire — it's incomplete.
+
+        The full question 'alex do you currently speak' arrives as:
+          chunk 1 (final): 'alex do you currently'
+          chunk 2 (final): 'speak'
+        Neither has punctuation, so the bot uses *time-based settling*:
+        it waits until the speaker goes quiet for ~3 s, then fires.
+        """
+        chunk1 = TranscriptChunk(
+            text="alex do you currently",
+            timestamp=datetime.now(),
+            speaker="Sarthak",
+        )
+        base_context.recent_transcript.append(chunk1)
+
+        triggers1 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk1]
+        )
+        # Should NOT fire yet — just started buffering
+        assert len(triggers1) == 0
+
+        chunk2 = TranscriptChunk(
+            text="speak",
+            timestamp=datetime.now(),
+            speaker="Sarthak",
+        )
+        base_context.recent_transcript.append(chunk2)
+
+        triggers2 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk2]
+        )
+        # Still no fire — no punctuation and settle time hasn't elapsed
+        assert len(triggers2) == 0
+
+        # Simulate 4 seconds of silence (settle time = 3s)
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+
+        triggers3 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+        assert len(triggers3) == 1
+        assert triggers3[0].type == TriggerType.VOICE_ADDRESS
+        assert "speak" in triggers3[0].relevant_transcript.lower()
+
+    @pytest.mark.asyncio
+    async def test_interim_chunks_keep_buffer_alive(self, trigger_engine, base_context):
+        """Interim (non-final) chunks act as 'still speaking' heartbeat.
+
+        When someone says 'Alex, do you... ummm... speak?':
+          chunk 1 (final):   'alex do you'     → starts buffer
+          chunk 2 (interim): 'ummm'            → heartbeat, no text added
+          chunk 3 (final):   'speak?'          → punctuation → fire
+
+        Without the interim heartbeat, the settle timer would fire after
+        chunk 1 with an incomplete question.
+        """
+        chunk1 = TranscriptChunk(
+            text="alex do you",
+            timestamp=datetime.now(),
+            speaker="Sarthak",
+            is_final=True,
+        )
+        base_context.recent_transcript.append(chunk1)
+
+        triggers1 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk1]
+        )
+        assert len(triggers1) == 0  # buffering started
+
+        # Simulate settle time passing, BUT an interim chunk arrives (filler sound)
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+
+        interim_chunk = TranscriptChunk(
+            text="um",
+            timestamp=datetime.now(),
+            speaker="Sarthak",
+            is_final=False,  # ← interim = still speaking
+        )
+
+        # The interim chunk should reset the settle clock → no fire
+        triggers2 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[interim_chunk]
+        )
+        assert len(triggers2) == 0  # heartbeat prevented premature fire
+
+        # Now the final chunk with the complete question arrives
+        chunk3 = TranscriptChunk(
+            text="currently speak?",
+            timestamp=datetime.now(),
+            speaker="Sarthak",
+            is_final=True,
+        )
+        base_context.recent_transcript.append(chunk3)
+
+        triggers3 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk3]
+        )
+        assert len(triggers3) == 1
+        assert triggers3[0].type == TriggerType.VOICE_ADDRESS
+        assert "speak" in triggers3[0].relevant_transcript.lower()
+
+    @pytest.mark.asyncio
     async def test_no_trigger_when_name_mentioned_in_passing(self, trigger_engine, base_context):
         """Mentioning the name without a question/request should NOT trigger."""
         chunk = TranscriptChunk(
@@ -787,7 +949,7 @@ class TestVoiceAddress:
         base_context.concerns_raised.append(concern)
 
         chunk = TranscriptChunk(
-            text="Alex, summarize the database scaling discussion",
+            text="Alex, summarize the database scaling discussion.",
             timestamp=datetime.now(),
             speaker="Sarah",
         )

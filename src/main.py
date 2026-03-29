@@ -235,6 +235,17 @@ class MeetingAssistant:
                     for trigger in triggers:
                         await self._process_trigger(trigger, context)
 
+                elif self.context_engine and self.trigger_engine:
+                    # No new chunks, but still need to check if voice buffer
+                    # settle timer should fire (speaker went quiet after
+                    # saying our name).
+                    context = self.context_engine.get_context_snapshot()
+                    triggers = await self.trigger_engine.check_for_triggers(
+                        context=context, new_chunks=[]
+                    )
+                    for trigger in triggers:
+                        await self._process_trigger(trigger, context)
+
                 await asyncio.sleep(config.trigger.check_interval_ms / 1000.0)
 
             except asyncio.CancelledError:
