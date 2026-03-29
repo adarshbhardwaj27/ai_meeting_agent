@@ -1,0 +1,20 @@
+{
+  "meeting_id": "voice_3rd_person_middle_statement",
+  "description": "3rd-person reference in middle of statement — 'I spoke with alex about' — must NOT trigger (no question word, no ?)",
+  "tags": ["voice-address", "negative", "false-positive", "question-heuristic"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I spoke with alex about the budget last week",
+      "is_final": true, "delay_ms": 0,
+      "comment": "'I' is not a question word, no '?' → heuristic rejects it"
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address",
+      "comment": "Heuristic correctly blocks this 3rd-person reference"
+    }
+  ]
+}

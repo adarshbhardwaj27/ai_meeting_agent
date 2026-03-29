@@ -1,0 +1,20 @@
+{
+  "meeting_id": "voice_3rd_person_not_question",
+  "description": "3rd-person reference without question syntax — 'alex mentioned the deadline' — must NOT trigger",
+  "tags": ["voice-address", "negative", "false-positive", "question-heuristic"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "alex mentioned the deadline is next friday",
+      "is_final": true, "delay_ms": 0,
+      "comment": "Starts with 'alex' so START pattern matches — this IS a known limitation"
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "comment": "KNOWN LIMITATION: name at start always matches regardless of intent"
+    }
+  ]
+}

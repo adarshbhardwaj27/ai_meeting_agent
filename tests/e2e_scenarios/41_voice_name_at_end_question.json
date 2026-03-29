@@ -1,0 +1,20 @@
+{
+  "meeting_id": "voice_name_at_end_with_question_mark",
+  "description": "Name at end with explicit question mark — fires immediately",
+  "tags": ["voice-address", "name-at-end", "question-heuristic"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "can you explain the architecture alex?",
+      "is_final": true, "delay_ms": 0,
+      "comment": "Ends with '?' → question heuristic passes, fires immediately"
+    },
+    { "type": "wait", "delay_ms": 1500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "explain the architecture"
+    }
+  ]
+}

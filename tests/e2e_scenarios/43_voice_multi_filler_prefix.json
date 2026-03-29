@@ -1,0 +1,20 @@
+{
+  "meeting_id": "voice_multiple_fillers_before_name",
+  "description": "Multiple filler words before name — 'okay so alex' — should trigger (regex now allows zero or more fillers)",
+  "tags": ["voice-address", "prefix", "multi-filler"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh",
+      "text": "okay so alex what do you think is the prime minister of india",
+      "is_final": true, "delay_ms": 0,
+      "comment": "Two fillers (okay + so) before alex — used to fail, now works"
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "prime minister"
+    }
+  ]
+}

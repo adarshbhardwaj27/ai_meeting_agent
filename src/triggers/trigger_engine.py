@@ -308,29 +308,116 @@ class TriggerEngine:
 
     # ── Voice-mention detection ────────────────────────────────────
 
+    # Words that start a question or command — used by the question
+    # heuristic when the bot's name appears mid/end-of-sentence.
+    _QUESTION_STARTERS = frozenset({
+        # Interrogative / wh-words
+        'what', 'how', 'why', 'when', 'where', 'who', 'which',
+        # Auxiliary verbs that open a yes/no question
+        'can', 'could', 'should', 'would', 'will', 'do', 'does',
+        'did', 'is', 'are', 'was', 'were', 'has', 'have',
+        # Imperative / command verbs people use with bots
+        'summarize', 'explain', 'help', 'tell', 'show', 'list',
+        'find', 'check', 'give', 'describe', 'compare', 'analyze',
+        'please',
+    })
+
     def _build_voice_mention_patterns(self) -> List[re.Pattern]:
-        """Build a simple pattern to detect when someone says the bot's name.
+        """Build pattern to detect the bot's name at the START of speech.
 
-        Just one rule: if the text starts with the bot's name (with an
-        optional greeting prefix like 'hey'), it's addressed to us.
-        Everything after the name is captured and buffered.
+        Allows zero or more filler/greeting words before the name, so
+        "okay so alex what do you think?" is handled the same as
+        "alex what do you think?".
 
-        We DON'T try to parse the grammar of what follows.  Instead we
-        buffer all subsequent speech and fire after 3 s of silence.
+        For name-at-END or name-in-MIDDLE detection, see
+        ``_match_voice_mention`` which falls through to a second check
+        with a question heuristic.
         """
         name = re.escape(self.bot_name)
         return [
-            # Name at start, with an optional filler/greeting/connector
-            # before it.  Real speech often starts with "so alex",
-            # "and alex", "yeah alex", etc.
-            # Matches: "alex ...", "hey alex ...", "so alex ...",
-            #          "but alex, ...", "yeah alex", "alex"
+            # Name at start, with zero or more filler/greeting/connector
+            # words.  Real speech often chains fillers: "okay so alex",
+            # "yeah but alex", "um well alex", etc.
+            # Matches: "alex ...", "hey alex ...", "okay so alex ...",
+            #          "yeah but alex, ...", "um well alex", "alex"
             re.compile(
                 rf"^(?:(?:hey|hi|yo|ok|so|and|but|yeah|yea|like"
-                rf"|well|um|uh|oh|right|okay|now)\s+)?{name}[,:\s]*(.*)",
+                rf"|well|um|uh|oh|right|okay|now)\s+)*{name}[,:\s]*(.*)",
                 re.IGNORECASE,
             ),
         ]
+
+    def _match_voice_mention(self, text: str) -> Optional[str]:
+        """Detect the bot's name in *text* and extract the question part.
+
+        Returns the question text (str) or ``None`` if no mention found.
+
+        Three positions are handled:
+
+        1. **START** — ``"hey alex what time is it?"``
+           → returns ``"what time is it?"``  (most reliable, no heuristic)
+
+        2. **END** — ``"what do you think alex?"``
+           → returns ``"what do you think?"``  (requires question heuristic)
+
+        3. **MIDDLE** — ``"can alex help with this?"``
+           → returns ``"can help with this?"``  (requires question heuristic)
+
+        For positions 2 and 3 a **question heuristic** is applied to
+        avoid false positives like *"I talked to alex yesterday"*: the
+        sentence must end with ``?`` or start with a question/command
+        word (what, how, can, summarize, …).
+        """
+        text_stripped = text.strip()
+        if not text_stripped:
+            return None
+
+        # ── 1. Name at START (most reliable) ────────────────────────
+        for pattern in self._voice_mention_patterns:
+            m = pattern.search(text_stripped)
+            if m:
+                return (m.group(1) or "").strip()
+
+        # ── 2. Name elsewhere — require question heuristic ──────────
+        name_re = re.compile(
+            rf'\b{re.escape(self.bot_name)}\b', re.IGNORECASE
+        )
+        m = name_re.search(text_stripped)
+        if not m:
+            return None
+
+        # Must look like a question / command to avoid 3rd-person refs
+        if not self._looks_like_question(text_stripped):
+            return None
+
+        before = text_stripped[:m.start()].strip().rstrip(',: ')
+        after  = text_stripped[m.end():].strip().lstrip(',: ')
+
+        if not after or after.rstrip('?!. ') == '':
+            # Name at END: "what do you think alex?"
+            # Transfer any trailing punctuation back onto the question
+            punct = after.strip() if after.strip() in ('?', '!', '.') else ''
+            return (before + punct).strip()
+        else:
+            # Name in MIDDLE: "can alex help with this?"
+            return f"{before} {after}".strip()
+
+    @staticmethod
+    def _looks_like_question(text: str) -> bool:
+        """Return True if *text* looks like a question or command.
+
+        Used as a guard for non-start name positions to reject
+        3rd-person references ("I talked to alex yesterday").
+        """
+        text = text.strip()
+        if not text:
+            return False
+        # Ends with a question mark → definitely a question
+        if text[-1] == '?':
+            return True
+        # First word is a question / command word
+        first_word = text.split()[0].lower().rstrip('.,!?')
+        return first_word in TriggerEngine._QUESTION_STARTERS
 
     def _check_for_voice_mention(
         self,
@@ -383,11 +470,10 @@ class TriggerEngine:
 
             # ── Does this chunk contain the bot's name? ─────────────
             matched_name = False
-            for pattern in self._voice_mention_patterns:
-                match = pattern.search(text)
-                if match:
+            after_name_text = self._match_voice_mention(text)
+            if after_name_text is not None:
                     matched_name = True
-                    after_name = (match.group(1) or "").strip()
+                    after_name = after_name_text
 
                     # Punctuation = STT already endpointed → fire now.
                     if after_name and after_name[-1] in "?.!":
@@ -423,13 +509,10 @@ class TriggerEngine:
                     self._voice_buffer_text = after_name
                     self._voice_buffer_started = now
                     self._voice_buffer_last_chunk = now
-                    content_added_this_cycle = True
 
                     # Return the old trigger if there was one.
                     if pending_trigger:
                         return pending_trigger
-
-                    break  # one match per chunk
 
             # ── Continuation of an already-buffered question ────────
             if not matched_name and self._voice_buffer_started:

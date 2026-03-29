@@ -1,0 +1,20 @@
+{
+  "meeting_id": "voice_name_in_middle_question",
+  "description": "Name in MIDDLE of a question — 'can alex help with this?' — should trigger",
+  "tags": ["voice-address", "name-in-middle", "question-heuristic"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "can alex help us with the database migration?",
+      "is_final": true, "delay_ms": 0,
+      "comment": "'can' is a question word AND ends with '?' → triggers"
+    },
+    { "type": "wait", "delay_ms": 1500 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "database migration"
+    }
+  ]
+}

@@ -982,6 +982,80 @@ class TestVoiceAddress:
         assert "which should we use" in triggers[0].relevant_transcript
 
     @pytest.mark.asyncio
+    async def test_voice_multiple_fillers(self, trigger_engine, base_context):
+        """'okay so alex what do you think' — multiple fillers before name
+        should match the start pattern (regex allows * not ?)."""
+        chunk = TranscriptChunk(
+            text="okay so alex what do you think about this?",
+            timestamp=datetime.now(),
+            speaker="Adarsh",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert "what do you think" in triggers[0].relevant_transcript
+
+    @pytest.mark.asyncio
+    async def test_voice_name_at_end_question(self, trigger_engine, base_context):
+        """'what do you think alex?' — name at END of question fires."""
+        chunk = TranscriptChunk(
+            text="what do you think alex?",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert "what do you think" in triggers[0].relevant_transcript
+
+    @pytest.mark.asyncio
+    async def test_voice_name_in_middle_question(self, trigger_engine, base_context):
+        """'can alex help with the migration?' — name in MIDDLE fires."""
+        chunk = TranscriptChunk(
+            text="can alex help with the migration?",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert "migration" in triggers[0].relevant_transcript
+
+    @pytest.mark.asyncio
+    async def test_voice_3rd_person_no_trigger(self, trigger_engine, base_context):
+        """'I talked to alex yesterday' — 3rd person statement must NOT trigger."""
+        chunk = TranscriptChunk(
+            text="I talked to alex yesterday about the deployment",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        voice_triggers = [t for t in triggers if t.type == TriggerType.VOICE_ADDRESS]
+        assert len(voice_triggers) == 0
+
+    @pytest.mark.asyncio
+    async def test_voice_name_at_end_no_question(self, trigger_engine, base_context):
+        """'great work alex' — name at end of non-question must NOT trigger."""
+        chunk = TranscriptChunk(
+            text="great work alex",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        voice_triggers = [t for t in triggers if t.type == TriggerType.VOICE_ADDRESS]
+        assert len(voice_triggers) == 0
+
+    @pytest.mark.asyncio
     async def test_voice_buffer_overwrite_fires_old(self, trigger_engine, base_context):
         """When a new 'alex' question arrives while buffer has content,
         the OLD question should fire first — never silently dropped."""

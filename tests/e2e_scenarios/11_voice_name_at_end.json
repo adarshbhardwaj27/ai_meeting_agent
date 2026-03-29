@@ -1,19 +1,20 @@
 {
   "meeting_id": "voice_name_at_end",
-  "description": "Someone says 'what do you think alex' — name at END of sentence — must NOT trigger",
-  "tags": ["voice-address", "negative", "false-positive"],
+  "description": "Someone says 'what do you think alex' — name at END of a question — SHOULD trigger because the sentence starts with 'what' (question word)",
+  "tags": ["voice-address", "name-at-end", "question-heuristic"],
   "events": [
     {
       "type": "transcript", "speaker": "Mike",
       "text": "what do you think alex",
-      "is_final": true, "delay_ms": 0
+      "is_final": true, "delay_ms": 0,
+      "comment": "'what' is a question word → question heuristic passes → trigger fires"
     },
     { "type": "wait", "delay_ms": 4000 },
     {
       "type": "assert",
-      "condition": "no_trigger",
+      "condition": "trigger_fired",
       "trigger_type": "voice_address",
-      "comment": "Name at end = rhetorical address, not a command to the bot"
+      "text_contains": "what do you think"
     }
   ]
 }
