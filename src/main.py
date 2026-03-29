@@ -15,7 +15,7 @@ import asyncio
 import argparse
 import signal
 from datetime import datetime
-from typing import Optional, List
+from typing import Callable, Optional, List
 import structlog
 
 from src.config import config
@@ -29,6 +29,7 @@ from src.chat import ChatManager
 from src.bot import create_bot, detect_platform, BaseMeetingBot, BotState, MeetingPlatform
 from src.captions import CaptionScraper
 from src.transcription.realtime_server import RealtimeTranscriptServer
+from src.meeting_logger import MeetingLogger
 
 # Configure structured logging
 structlog.configure(
@@ -67,9 +68,19 @@ class MeetingAssistant:
       ChatManager <──response── LLMService <──trigger+context──+
     """
 
-    def __init__(self, meeting_url: str):
+    def __init__(
+        self,
+        meeting_url: str,
+        *,
+        bot: Optional[BaseMeetingBot] = None,
+        llm_service: Optional[LLMService] = None,
+    ):
         self.meeting_url = meeting_url
         self.platform = detect_platform(meeting_url)
+
+        # Dependency-injection overrides (for testing)
+        self._injected_bot = bot
+        self._injected_llm = llm_service
 
         # Components (initialised in start())
         self.bot: Optional[BaseMeetingBot] = None
@@ -86,6 +97,13 @@ class MeetingAssistant:
         self._new_chunks: List[TranscriptChunk] = []
         self._chunk_lock = asyncio.Lock()
 
+        # Session logger (append-mode file log for post-meeting analysis)
+        self.meeting_logger: Optional[MeetingLogger] = None
+
+        # Observable hooks — set by tests to inspect events
+        self.on_trigger_fired: Optional[Callable] = None
+        self.on_response_sent: Optional[Callable] = None
+
         logger.info(
             "assistant_created",
             platform=self.platform.value,
@@ -98,12 +116,20 @@ class MeetingAssistant:
         """Start the meeting assistant."""
         logger.info("assistant_starting")
 
-        try:
-            # 1. LLM service
-            self.llm_service = LLMService()
+        # Create session logger (appends to logs/meeting_sessions.log)
+        meeting_id = f"meeting_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        source = "e2e-test" if self._injected_bot else "live"
+        self.meeting_logger = MeetingLogger(
+            meeting_id=meeting_id,
+            source=source,
+        )
 
-            # 2. Meeting bot (platform-specific)
-            self.bot = create_bot(self.platform.value)
+        try:
+            # 1. LLM service (use injected or create real)
+            self.llm_service = self._injected_llm or LLMService()
+
+            # 2. Meeting bot (use injected or create real)
+            self.bot = self._injected_bot or create_bot(self.platform.value)
 
             # 3. Chat manager (sends messages via bot)
             self.chat_manager = ChatManager(self.bot)
@@ -123,53 +149,60 @@ class MeetingAssistant:
             self.bot.on_chat_message(self._on_chat_message)
             self.bot.on_state_change(self._on_bot_state_change)
 
-            # 7. Join the meeting
-            print(f"🔗 Joining meeting: {self.meeting_url}")
-            print(f"📋 Platform: {self.platform.value}")
-
-            # ── Platform-specific: start transcript source ───────────
-            if self.platform == MeetingPlatform.GOOGLE_MEET:
-                # Google Meet: use browser + caption scraping (free)
-                self.caption_scraper = CaptionScraper(
-                    on_transcript=self._on_transcript_chunk,
-                    poll_interval_ms=300,
-                    meeting_url=self.meeting_url,
-                )
-
-                joined = await self.bot.join(self.meeting_url)
-                if not joined:
-                    raise Exception("Failed to join meeting")
-
-                page = self.bot.get_page()
-                if page:
-                    await self.caption_scraper.start(page)
-                else:
-                    print("⚠️  Could not get browser page for caption scraping")
-                    logger.error("no_page_for_captions")
-
+            # 7. Join the meeting (skip if bot is already in-meeting,
+            #    e.g. FakeBot in E2E tests)
+            if self.bot.state == BotState.IN_MEETING:
+                logger.info("bot_already_in_meeting_skipping_join")
+                self.meeting_logger.event("🔗", "Bot already in meeting (injected)")
             else:
-                # Teams / Zoom: use Recall.ai (managed API)
-                # Start real-time WebSocket server if tunnel URL is configured
-                if config.recall.realtime_url:
-                    try:
-                        self.realtime_server = RealtimeTranscriptServer(
-                            port=config.recall.realtime_ws_port,
-                            callback=self._on_transcript_chunk,
-                        )
-                        await self.realtime_server.start()
-                        print(f"🌐 Tunnel URL: {config.recall.realtime_url}")
-                    except Exception as e:
-                        logger.error("realtime_server_start_failed", error=str(e))
-                        print(f"⚠️  Real-time server failed: {e}")
-                        print("   Falling back to post-meeting transcript")
-                        self.realtime_server = None
+                print(f"🔗 Joining meeting: {self.meeting_url}")
+                print(f"📋 Platform: {self.platform.value}")
+                self.meeting_logger.event("🔗", f"Joining meeting: {self.meeting_url}")
+                self.meeting_logger.event("📋", f"Platform: {self.platform.value}")
 
-                # Set polling fallback callback
-                self.bot.set_transcript_callback(self._on_transcript_chunk)
+                # ── Platform-specific: start transcript source ───────────
+                if self.platform == MeetingPlatform.GOOGLE_MEET:
+                    # Google Meet: use browser + caption scraping (free)
+                    self.caption_scraper = CaptionScraper(
+                        on_transcript=self._on_transcript_chunk,
+                        poll_interval_ms=300,
+                        meeting_url=self.meeting_url,
+                    )
 
-                joined = await self.bot.join(self.meeting_url)
-                if not joined:
-                    raise Exception("Failed to join meeting")
+                    joined = await self.bot.join(self.meeting_url)
+                    if not joined:
+                        raise Exception("Failed to join meeting")
+
+                    page = self.bot.get_page()
+                    if page:
+                        await self.caption_scraper.start(page)
+                    else:
+                        print("⚠️  Could not get browser page for caption scraping")
+                        logger.error("no_page_for_captions")
+
+                else:
+                    # Teams / Zoom: use Recall.ai (managed API)
+                    # Start real-time WebSocket server if tunnel URL is configured
+                    if config.recall.realtime_url:
+                        try:
+                            self.realtime_server = RealtimeTranscriptServer(
+                                port=config.recall.realtime_ws_port,
+                                callback=self._on_transcript_chunk,
+                            )
+                            await self.realtime_server.start()
+                            print(f"🌐 Tunnel URL: {config.recall.realtime_url}")
+                        except Exception as e:
+                            logger.error("realtime_server_start_failed", error=str(e))
+                            print(f"⚠️  Real-time server failed: {e}")
+                            print("   Falling back to post-meeting transcript")
+                            self.realtime_server = None
+
+                    # Set polling fallback callback
+                    self.bot.set_transcript_callback(self._on_transcript_chunk)
+
+                    joined = await self.bot.join(self.meeting_url)
+                    if not joined:
+                        raise Exception("Failed to join meeting")
 
             # ── Common services ──────────────────────────────────────
             await self.context_engine.start()
@@ -182,7 +215,7 @@ class MeetingAssistant:
             source = "captions" if self.platform == MeetingPlatform.GOOGLE_MEET else "Recall.ai"
             print(f"🚀 Meeting assistant is LIVE — listening via {source}")
             logger.info("assistant_started", transcript_source=source)
-
+            self.meeting_logger.event("🚀", f"Meeting assistant is LIVE — listening via {source}")
         except Exception as e:
             logger.error("assistant_start_failed", error=str(e))
             await self.stop()
@@ -212,6 +245,12 @@ class MeetingAssistant:
         for svc in (self.trigger_engine, self.context_engine, self.chat_manager):
             if svc:
                 await svc.stop()
+
+        # Close session log
+        if self.meeting_logger:
+            self.meeting_logger.event("🛑", "Meeting assistant stopped")
+            self.meeting_logger.close()
+            self.meeting_logger = None
 
         logger.info("assistant_stopped")
 
@@ -264,6 +303,20 @@ class MeetingAssistant:
             confidence=trigger.confidence,
             reason=trigger.reason,
         )
+
+        # Observable hook — tests use this to record trigger events
+        if self.on_trigger_fired:
+            self.on_trigger_fired(trigger, context)
+
+        # Log trigger to session file
+        if self.meeting_logger:
+            self.meeting_logger.trigger_fired(
+                trigger_type=trigger.type.value,
+                speaker=trigger.reason[:40] if trigger.reason else "",
+                text=trigger.relevant_transcript or "",
+                confidence=trigger.confidence,
+            )
+
         try:
             recent_text = context.get_recent_text(minutes=3)
 
@@ -282,6 +335,15 @@ class MeetingAssistant:
                         trigger=trigger.type.value,
                         message=response.text[:50],
                     )
+                    # Observable hook — tests use this to record responses
+                    if self.on_response_sent:
+                        self.on_response_sent(response, trigger)
+                    # Log response to session file
+                    if self.meeting_logger:
+                        self.meeting_logger.bot_response(
+                            text=response.text,
+                            trigger_type=trigger.type.value,
+                        )
             else:
                 logger.debug("llm_skipped_response", trigger=trigger.type.value)
 
@@ -292,6 +354,13 @@ class MeetingAssistant:
 
     def _on_transcript_chunk(self, chunk: TranscriptChunk):
         """Called by CaptionScraper when a new caption line appears."""
+        # Log to session file
+        if self.meeting_logger:
+            self.meeting_logger.transcript(
+                speaker=chunk.speaker,
+                text=chunk.text,
+                is_final=chunk.is_final,
+            )
         asyncio.create_task(self.context_engine.add_transcript_chunk(chunk))
         asyncio.create_task(self._add_chunk(chunk))
 

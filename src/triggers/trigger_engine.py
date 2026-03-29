@@ -320,10 +320,14 @@ class TriggerEngine:
         """
         name = re.escape(self.bot_name)
         return [
-            # Name at start, with optional greeting prefix and punctuation
-            # Matches: "alex ...", "hey alex ...", "hi alex, ...", "alex"
+            # Name at start, with an optional filler/greeting/connector
+            # before it.  Real speech often starts with "so alex",
+            # "and alex", "yeah alex", etc.
+            # Matches: "alex ...", "hey alex ...", "so alex ...",
+            #          "but alex, ...", "yeah alex", "alex"
             re.compile(
-                rf"^(?:(?:hey|hi|yo|ok)\s+)?{name}[,:\s]*(.*)",
+                rf"^(?:(?:hey|hi|yo|ok|so|and|but|yeah|yea|like"
+                rf"|well|um|uh|oh|right|okay|now)\s+)?{name}[,:\s]*(.*)",
                 re.IGNORECASE,
             ),
         ]
@@ -394,12 +398,37 @@ class TriggerEngine:
                             context=context,
                         )
 
-                    # Otherwise start (or restart) the buffer.
+                    # ── If the buffer already has content, fire it
+                    #    before starting the new question.  This
+                    #    prevents the old question from being silently
+                    #    dropped when someone says "alex" again.
+                    pending_trigger = None
+                    if (
+                        self._voice_buffer_started
+                        and self._voice_buffer_text.strip()
+                    ):
+                        logger.debug(
+                            "voice_buffer_flushed_by_new_name",
+                            old_text=self._voice_buffer_text[:60],
+                            new_text=after_name[:40],
+                        )
+                        pending_trigger = self._create_voice_trigger(
+                            speaker=self._voice_buffer_speaker or chunk.speaker,
+                            question_text=self._voice_buffer_text.strip(),
+                            context=context,
+                        )
+
+                    # Start the new buffer.
                     self._voice_buffer_speaker = chunk.speaker
                     self._voice_buffer_text = after_name
                     self._voice_buffer_started = now
                     self._voice_buffer_last_chunk = now
                     content_added_this_cycle = True
+
+                    # Return the old trigger if there was one.
+                    if pending_trigger:
+                        return pending_trigger
+
                     break  # one match per chunk
 
             # ── Continuation of an already-buffered question ────────

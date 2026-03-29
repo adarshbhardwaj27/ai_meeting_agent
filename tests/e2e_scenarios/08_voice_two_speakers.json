@@ -1,0 +1,25 @@
+{
+  "meeting_id": "voice_two_speakers_rapid",
+  "description": "Two speakers both say Alex quickly — second speaker's question should eventually get through",
+  "tags": ["voice-address", "multi-speaker"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarthak Bhardwaj",
+      "text": "alex let's move on", "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "alex can you summarize?", "is_final": true, "delay_ms": 800
+    },
+    {
+      "type": "wait", "delay_ms": 2000
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "summarize",
+      "comment": "Second speaker's chunk (with punctuation) should overwrite and fire"
+    }
+  ]
+}

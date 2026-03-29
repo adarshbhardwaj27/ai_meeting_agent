@@ -1,0 +1,70 @@
+{
+  "meeting_id": "voice_so_prefix_and_buffer_overwrite",
+  "description": "Reproduces real meeting bugs: 'so alex' prefix + buffer overwrite when second 'alex' arrives before settle",
+  "tags": ["voice-address", "prefix", "buffer-overwrite", "regression"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "so what i was thinking was using aws as our team is familiar with that more than using azure",
+      "is_final": true, "delay_ms": 0,
+      "comment": "Context: speaker is discussing cloud choices"
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "so alex which should we use",
+      "is_final": true, "delay_ms": 1000,
+      "comment": "Bug 1: 'so alex' was not matched by old pattern"
+    },
+    {
+      "type": "wait", "delay_ms": 3500,
+      "comment": "Wait for 3s settle timer to fire"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "which should we use",
+      "comment": "'so alex' must now be detected"
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "alex our website is a streaming service which is catered to millions of users",
+      "is_final": true, "delay_ms": 500,
+      "comment": "First question: gives context about the website"
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "so what will be the service cost of using azure",
+      "is_final": true, "delay_ms": 1500,
+      "comment": "Continuation: appended to buffer (no 'alex' at start)"
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "alex what is the date today",
+      "is_final": true, "delay_ms": 1500,
+      "comment": "Bug 2: new 'alex' must flush old buffer, not drop it"
+    },
+    {
+      "type": "wait", "delay_ms": 500,
+      "comment": "Brief pause for the flushed trigger to process"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "streaming service",
+      "comment": "The OLD buffered question must fire (not be dropped)"
+    },
+    {
+      "type": "wait", "delay_ms": 3500,
+      "comment": "Wait for the NEW buffer ('what is the date today') to settle"
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "date today",
+      "comment": "The new question fires after settle"
+    }
+  ]
+}

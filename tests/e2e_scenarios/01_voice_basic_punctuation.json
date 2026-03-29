@@ -1,0 +1,32 @@
+{
+  "meeting_id": "voice_basic_punctuation",
+  "description": "Alex asked a question ending with '?' — should fire immediately without waiting for settle",
+  "tags": ["voice-address", "happy-path"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "al", "is_final": false, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "alex can you", "is_final": false, "delay_ms": 600
+    },
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "alex can you summarize?", "is_final": true, "delay_ms": 600
+    },
+    {
+      "type": "wait", "delay_ms": 1500
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "summarize"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

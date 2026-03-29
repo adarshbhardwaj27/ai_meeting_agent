@@ -1,0 +1,27 @@
+{
+  "meeting_id": "contradiction_across_speakers",
+  "description": "Speaker A says X, Speaker B says not-X — should detect contradiction",
+  "tags": ["intelligence", "contradiction"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "The deployment deadline is definitely Friday.", "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "Let me check the timeline for the sprint.", "is_final": true, "delay_ms": 3000
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "The deployment deadline is not Friday it is next Monday.", "is_final": true, "delay_ms": 3000
+    },
+    {
+      "type": "wait", "delay_ms": 2000
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "contradiction"
+    }
+  ]
+}

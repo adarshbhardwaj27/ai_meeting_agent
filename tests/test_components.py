@@ -963,6 +963,73 @@ class TestVoiceAddress:
         assert len(triggers) == 1
         assert triggers[0].type == TriggerType.VOICE_ADDRESS
 
+    @pytest.mark.asyncio
+    async def test_voice_mention_so_prefix(self, trigger_engine, base_context):
+        """'so alex which should we use' — common connector prefix must match."""
+        chunk = TranscriptChunk(
+            text="so alex which should we use?",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert "which should we use" in triggers[0].relevant_transcript
+
+    @pytest.mark.asyncio
+    async def test_voice_buffer_overwrite_fires_old(self, trigger_engine, base_context):
+        """When a new 'alex' question arrives while buffer has content,
+        the OLD question should fire first — never silently dropped."""
+        # First question (no punctuation → goes into buffer)
+        chunk1 = TranscriptChunk(
+            text="alex our website is a streaming service",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk1]
+        )
+
+        # Continuation (appended to buffer)
+        chunk2 = TranscriptChunk(
+            text="what will be the cost of using azure",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk2]
+        )
+
+        # NEW "alex" question arrives before settle timer — old buffer should fire
+        chunk3 = TranscriptChunk(
+            text="alex what is the date today",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk3]
+        )
+
+        # The OLD buffered question should fire (not be dropped)
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert "streaming service" in triggers[0].relevant_transcript
+        assert "cost" in triggers[0].relevant_transcript
+
+        # The NEW question is now in the buffer — let settle timer fire it
+        import asyncio
+        await asyncio.sleep(3.5)
+        triggers2 = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+        assert len(triggers2) == 1
+        assert "date today" in triggers2[0].relevant_transcript
+
 
 # =============================================================================
 # Integration Tests

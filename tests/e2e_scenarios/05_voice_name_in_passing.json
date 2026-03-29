@@ -1,0 +1,20 @@
+{
+  "meeting_id": "voice_name_in_passing",
+  "description": "Alex mentioned in passing ('I think Alex would agree') — should NOT trigger",
+  "tags": ["voice-address", "negative"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "I think Alex would agree with that approach.", "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "wait", "delay_ms": 4000,
+      "comment": "Wait long enough for settle timer — but it should never have started"
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "comment": "Name not at start of text — not addressed to the bot"
+    }
+  ]
+}
