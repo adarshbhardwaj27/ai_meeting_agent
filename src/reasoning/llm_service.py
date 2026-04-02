@@ -136,7 +136,7 @@ RULES:
 - Be concise (2-3 lines max) but genuinely helpful
 - Use the full meeting context to give the best answer
 - Address the speaker by name if known
-- Be natural and conversational — this is a spoken interaction, your reply appears in chat
+- Be natural and conversational — this is a spoken interaction and your reply may be spoken aloud
 - If they asked a known command (summarize, risks, etc.) follow that command's format""",
 }
 

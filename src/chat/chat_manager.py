@@ -89,12 +89,17 @@ class ChatManager:
                 priority=response.priority.value
             )
             return False
-        
-        # Format message
-        formatted_message = self._format_message(response.text)
-        
-        # Send via bot
-        success = await self.bot.send_chat(formatted_message)
+
+        success = False
+
+        if self._should_send_as_speech(response):
+            success = await self.bot.send_speech(self._format_speech(response.text))
+            if not success:
+                logger.info("speech_delivery_fell_back_to_chat")
+
+        if not success:
+            formatted_message = self._format_message(response.text)
+            success = await self.bot.send_chat(formatted_message)
         
         if success:
             response.mark_sent()
@@ -143,6 +148,17 @@ class ChatManager:
     def _format_message(self, text: str) -> str:
         """Format a message with the bot label."""
         return f"{self.bot_label}: {text}"
+
+    def _format_speech(self, text: str) -> str:
+        """Format text for spoken delivery without chat-specific labels."""
+        return text.strip()
+
+    def _should_send_as_speech(self, response: AIResponse) -> bool:
+        """Direct voice-addressed replies may be spoken on supported bots."""
+        return (
+            response.trigger.type == TriggerType.VOICE_ADDRESS
+            and getattr(self.bot, "supports_speech_output", False) is True
+        )
     
     async def _process_queue(self):
         """Background task to process queued messages."""

@@ -1,6 +1,6 @@
 {
   "meeting_id": "voice_settle_no_punctuation",
-  "description": "Alex asked a question WITHOUT punctuation — should fire after 3s silence",
+  "description": "Alex asked a question WITHOUT punctuation — should fire after 1.5s silence",
   "tags": ["voice-address", "settle-timer"],
   "events": [
     {
@@ -25,8 +25,8 @@
       "comment": "No trigger yet — no punctuation, settle timer hasn't elapsed"
     },
     {
-      "type": "wait", "delay_ms": 4000,
-      "comment": "Wait for 3s settle timer to fire"
+      "type": "wait", "delay_ms": 2000,
+      "comment": "Wait for 1.5s settle timer to fire"
     },
     {
       "type": "assert",

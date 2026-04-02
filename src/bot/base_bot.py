@@ -84,6 +84,15 @@ class BaseMeetingBot(ABC):
             True if sent successfully, False otherwise
         """
         pass
+
+    @property
+    def supports_speech_output(self) -> bool:
+        """Whether the bot can speak into the meeting."""
+        return False
+
+    async def send_speech(self, text: str) -> bool:
+        """Send spoken output into the meeting when supported."""
+        return False
     
     def on_chat_message(self, callback: Callable[[str, str], None]):
         """Register callback for chat messages (sender, text)."""

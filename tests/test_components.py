@@ -909,8 +909,8 @@ class TestVoiceAddress:
         )
         assert len(triggers2) == 0
 
-        # Simulate silence (settle time elapsed — 3s threshold)
-        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+        # Simulate silence (settle time elapsed — 1.5s threshold)
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
 
         triggers3 = await trigger_engine.check_for_triggers(
             context=base_context, new_chunks=[]
@@ -927,7 +927,7 @@ class TestVoiceAddress:
           chunk 1 (final): 'alex do you currently'
           chunk 2 (final): 'speak'
         Neither has punctuation, so the bot uses *time-based settling*:
-        it waits until the speaker goes quiet for ~3 s, then fires.
+        it waits until the speaker goes quiet for ~1.5 s, then fires.
         """
         chunk1 = TranscriptChunk(
             text="alex do you currently",
@@ -955,8 +955,8 @@ class TestVoiceAddress:
         # Still no fire — no punctuation and settle time hasn't elapsed
         assert len(triggers2) == 0
 
-        # Simulate 4 seconds of silence (settle time = 3s)
-        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+        # Simulate 2 seconds of silence (settle time = 1.5s)
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
 
         triggers3 = await trigger_engine.check_for_triggers(
             context=base_context, new_chunks=[]
@@ -991,7 +991,7 @@ class TestVoiceAddress:
         assert len(triggers1) == 0  # buffering started
 
         # Simulate settle time passing, BUT an interim chunk arrives (filler sound)
-        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
 
         interim_chunk = TranscriptChunk(
             text="um",
@@ -1258,7 +1258,7 @@ class TestVoiceAddress:
 
         # The NEW question is now in the buffer — let settle timer fire it
         import asyncio
-        await asyncio.sleep(3.5)
+        await asyncio.sleep(2.0)
         triggers2 = await trigger_engine.check_for_triggers(
             context=base_context, new_chunks=[]
         )
@@ -1428,6 +1428,54 @@ class TestChatManager:
 
         assert sent_proactive is False
         bot.send_chat.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_voice_address_prefers_speech_on_supported_bot(self):
+        """Direct voice-addressed replies should use speech when the bot supports it."""
+        bot = Mock()
+        bot.supports_speech_output = True
+        bot.send_speech = AsyncMock(return_value=True)
+        bot.send_chat = AsyncMock(return_value=True)
+
+        manager = ChatManager(bot)
+
+        voice_trigger = Trigger.create_command(CommandType.CUSTOM, "help with this")
+        voice_trigger.type = TriggerType.VOICE_ADDRESS
+        voice_response = AIResponse.create(
+            text="Here is the answer.",
+            trigger=voice_trigger,
+            priority=MessagePriority.HIGH,
+        )
+
+        sent = await manager.send(voice_response)
+
+        assert sent is True
+        bot.send_speech.assert_awaited_once_with("Here is the answer.")
+        bot.send_chat.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_voice_address_falls_back_to_chat_when_speech_fails(self):
+        """Speech delivery failures should fall back to the existing chat path."""
+        bot = Mock()
+        bot.supports_speech_output = True
+        bot.send_speech = AsyncMock(return_value=False)
+        bot.send_chat = AsyncMock(return_value=True)
+
+        manager = ChatManager(bot)
+
+        voice_trigger = Trigger.create_command(CommandType.CUSTOM, "help with this")
+        voice_trigger.type = TriggerType.VOICE_ADDRESS
+        voice_response = AIResponse.create(
+            text="Here is the answer.",
+            trigger=voice_trigger,
+            priority=MessagePriority.HIGH,
+        )
+
+        sent = await manager.send(voice_response)
+
+        assert sent is True
+        bot.send_speech.assert_awaited_once_with("Here is the answer.")
+        bot.send_chat.assert_awaited_once_with(f"{manager.bot_label}: Here is the answer.")
 
 
 class TestLLMServiceFallback:

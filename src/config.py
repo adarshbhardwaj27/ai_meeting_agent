@@ -122,6 +122,23 @@ class ChatConfig:
 
 
 @dataclass
+class SpeechConfig:
+    """Speech output configuration."""
+    enable_voice_replies: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_VOICE_REPLIES", "true").lower() == "true"
+    )
+    openai_tts_model: str = field(
+        default_factory=lambda: os.getenv("OPENAI_TTS_MODEL", "tts-1")
+    )
+    openai_tts_voice: str = field(
+        default_factory=lambda: os.getenv("OPENAI_TTS_VOICE", "alloy")
+    )
+    openai_tts_speed: float = field(
+        default_factory=lambda: float(os.getenv("OPENAI_TTS_SPEED", "1.0"))
+    )
+
+
+@dataclass
 class RecallConfig:
     """Recall.ai configuration for Teams/Zoom meeting bot."""
     api_key: Optional[str] = field(
@@ -160,6 +177,7 @@ class AppConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
     chat: ChatConfig = field(default_factory=ChatConfig)
+    speech: SpeechConfig = field(default_factory=SpeechConfig)
     recall: RecallConfig = field(default_factory=RecallConfig)
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO")

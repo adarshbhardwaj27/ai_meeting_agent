@@ -85,7 +85,7 @@ class TriggerEngine:
         self._voice_buffer_started: Optional[datetime] = None
         self._voice_buffer_last_chunk: Optional[datetime] = None  # when last content was appended
         self._voice_buffer_max_age = timedelta(seconds=15)  # max wait before discarding
-        self._voice_settle_time  = timedelta(seconds=3)    # silence gap → speaker is done
+        self._voice_settle_time  = timedelta(seconds=1.5)  # silence gap → speaker is done
 
         # Decision language patterns
         self._decision_patterns = [

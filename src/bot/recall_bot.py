@@ -13,11 +13,17 @@ Docs: https://docs.recall.ai
 
 import asyncio
 import atexit
+import base64
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Optional, Callable
 import structlog
 
 from src.bot.base_bot import BaseMeetingBot, BotState, MeetingPlatform
 from src.config import config
+from src.reasoning.speech_service import SpeechService
 
 logger = structlog.get_logger()
 
@@ -54,6 +60,8 @@ class RecallBot(BaseMeetingBot):
         self._chat_monitor_task: Optional[asyncio.Task] = None
         self._transcript_monitor_task: Optional[asyncio.Task] = None
         self._transcript_callback: Optional[Callable] = None
+        self._speech_service = SpeechService()
+        self._speech_output_enabled = False
 
         # Load Recall.ai config
         self._api_key = config.recall.api_key
@@ -69,6 +77,10 @@ class RecallBot(BaseMeetingBot):
     @property
     def platform(self) -> MeetingPlatform:
         return self._platform
+
+    @property
+    def supports_speech_output(self) -> bool:
+        return self._speech_output_enabled
 
     def get_page(self):
         """Not applicable for Recall.ai — there is no browser page."""
@@ -122,6 +134,14 @@ class RecallBot(BaseMeetingBot):
                     }
                 },
             }
+
+            audio_output_config = self._build_automatic_audio_output_config()
+            if audio_output_config:
+                payload["output_media"] = audio_output_config
+                self._speech_output_enabled = True
+                logger.info("recall_speech_output_enabled")
+            else:
+                self._speech_output_enabled = False
 
             # If a real-time tunnel URL is configured, add realtime_endpoints
             # so Recall.ai pushes transcript chunks via WebSocket during the meeting
@@ -256,6 +276,7 @@ class RecallBot(BaseMeetingBot):
             logger.error("recall_leave_error", error=str(e))
 
         self._bot_id = None
+        self._speech_output_enabled = False
         self._set_state(BotState.DISCONNECTED)
 
     def _leave_sync(self):
@@ -288,6 +309,7 @@ class RecallBot(BaseMeetingBot):
             print(f"\n⚠️  Could not send leave: {e}")
 
         self._bot_id = None  # Prevent double cleanup
+        self._speech_output_enabled = False
 
     # ── Chat ─────────────────────────────────────────────────────────
 
@@ -335,7 +357,109 @@ class RecallBot(BaseMeetingBot):
             logger.error("recall_send_chat_error", error=str(e))
             return False
 
+    async def send_speech(self, text: str) -> bool:
+        """Speak a short reply into the meeting via Recall.ai audio output."""
+        if not self.supports_speech_output or not self._bot_id or self.state != BotState.IN_MEETING:
+            return False
+
+        b64_audio = await self._speech_service.synthesize_mp3_b64(text)
+        if not b64_audio:
+            logger.info("recall_speech_skipped_no_audio")
+            return False
+
+        try:
+            import httpx
+
+            headers = {
+                "Authorization": f"Token {self._api_key}",
+                "Content-Type": "application/json",
+            }
+
+            payload = {
+                "kind": "mp3",
+                "b64_data": b64_audio,
+            }
+
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    f"{self._api_base}/bot/{self._bot_id}/output_audio/",
+                    headers=headers,
+                    json=payload,
+                )
+                if response.status_code in (200, 201, 204):
+                    logger.info("recall_speech_sent", text=text[:50])
+                    return True
+
+                logger.error(
+                    "recall_speech_failed",
+                    status=response.status_code,
+                    error=response.text,
+                )
+                return False
+
+        except Exception as e:
+            logger.error("recall_send_speech_error", error=str(e))
+            return False
+
     # ── Internal helpers ─────────────────────────────────────────────
+
+    def _build_automatic_audio_output_config(self) -> Optional[dict]:
+        """Enable Recall's on-demand audio endpoint with a silent placeholder clip."""
+        if not config.speech.enable_voice_replies:
+            return None
+
+        if not self._speech_service.available:
+            logger.info("recall_speech_disabled_no_tts")
+            return None
+
+        silent_audio = self._generate_silent_mp3_b64()
+        if not silent_audio:
+            logger.info("recall_speech_disabled_no_silent_audio")
+            return None
+
+        return {
+            "automatic_audio_output": {
+                "in_call_recording": {
+                    "data": {
+                        "kind": "mp3",
+                        "b64_data": silent_audio,
+                    }
+                }
+            }
+        }
+
+    def _generate_silent_mp3_b64(self) -> Optional[str]:
+        """Create a tiny silent MP3 so Recall enables the output_audio endpoint."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            logger.warning("recall_speech_disabled_ffmpeg_missing")
+            return None
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_path = Path(temp_dir) / "silence.mp3"
+                command = [
+                    ffmpeg_path,
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=channel_layout=mono:sample_rate=24000",
+                    "-t",
+                    "0.25",
+                    "-q:a",
+                    "9",
+                    "-acodec",
+                    "libmp3lame",
+                    str(output_path),
+                    "-y",
+                    "-loglevel",
+                    "error",
+                ]
+                subprocess.run(command, check=True, capture_output=True)
+                return base64.b64encode(output_path.read_bytes()).decode("ascii")
+        except Exception as e:
+            logger.error("recall_silent_audio_generation_failed", error=str(e))
+            return None
 
     async def _wait_for_join(self, timeout: int = 120) -> bool:
         """
