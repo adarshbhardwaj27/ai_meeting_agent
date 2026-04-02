@@ -1,0 +1,22 @@
+{
+  "meeting_id": "gap_voice_embedded_request_to_summarize",
+  "description": "SHOULD trigger when a speaker embeds Alex in a request sentence like 'I want to ask Alex to summarize the risks here'",
+  "tags": ["gap", "voice-address", "expected-fail", "command"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "i want to ask alex to summarize the risks here",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

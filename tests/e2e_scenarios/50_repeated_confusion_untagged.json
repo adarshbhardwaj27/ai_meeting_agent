@@ -1,0 +1,23 @@
+{
+  "meeting_id": "repeated_confusion_without_tag",
+  "description": "Alex should proactively clarify when the conversation shows repeated confusion without anyone tagging it",
+  "tags": ["proactive", "confusion", "untagged"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "Sorry what do you mean by the rollback plan because I am confused.",
+      "is_final": true, "delay_ms": 0,
+      "comment": "Contains two confusion indicators in one utterance"
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "repeated_confusion"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "meeting_id": "gap_soft_repeated_confusion_language",
+  "description": "SHOULD detect repeated confusion expressed with softer natural language like 'I am a bit lost' and 'I am not following'",
+  "tags": ["gap", "proactive", "confusion", "expected-fail"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "i am a bit lost on the rollback plan",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "can we slow down because i am not following the rollback plan",
+      "is_final": true, "delay_ms": 3000
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "repeated_confusion"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

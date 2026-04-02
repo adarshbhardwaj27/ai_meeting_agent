@@ -583,6 +583,30 @@ class TestConversationIntelligence:
         assert "database" in memory_gaps[0].evidence_a.lower() or "migration" in memory_gaps[0].evidence_a.lower()
 
     @pytest.mark.asyncio
+    async def test_detect_memory_gap_with_colloquial_recall_language(self, intel, base_context):
+        """Colloquial recall phrases like 'I'm blanking on' should fire memory gap."""
+        earlier = [
+            TranscriptChunk(
+                text="The deployment window is Thursday 2am to 6am.",
+                timestamp=datetime.now() - timedelta(minutes=5),
+                speaker="Sarah",
+            )
+        ]
+        intel.score_signals(context=base_context, new_chunks=earlier)
+
+        later = [
+            TranscriptChunk(
+                text="I am blanking on when the deployment window is.",
+                timestamp=datetime.now(),
+                speaker="John",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=later)
+
+        memory_gaps = [s for s in signals if s.signal_type == SignalType.MEMORY_GAP]
+        assert len(memory_gaps) >= 1
+
+    @pytest.mark.asyncio
     async def test_no_memory_gap_without_recall_language(self, intel, base_context):
         """Normal speech without recall phrases should not fire memory gap."""
         earlier = [
@@ -1107,6 +1131,64 @@ class TestVoiceAddress:
         assert "migration" in triggers[0].relevant_transcript
 
     @pytest.mark.asyncio
+    async def test_voice_embedded_asking_statement_triggers(self, trigger_engine, base_context):
+        """Embedded 'asking Alex' phrasing should count as direct voice requests."""
+        chunk = TranscriptChunk(
+            text="no no i am asking alex what things you can help me with",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 0
+
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert "what things you can help me with" in triggers[0].relevant_transcript.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_embedded_request_keeps_command_classification(self, trigger_engine, base_context):
+        """Embedded direct-address requests should still map to known commands."""
+        chunk = TranscriptChunk(
+            text="i want to ask alex to summarize the risks here",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 0
+
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=4)
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.SUMMARIZE
+
+    @pytest.mark.asyncio
+    async def test_voice_past_reference_with_ask_does_not_trigger(self, trigger_engine, base_context):
+        """Past-tense references should stay non-triggering even if they include ask/Alex."""
+        chunk = TranscriptChunk(
+            text="i asked alex yesterday about the deployment timeline",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        voice_triggers = [t for t in triggers if t.type == TriggerType.VOICE_ADDRESS]
+        assert len(voice_triggers) == 0
+
+    @pytest.mark.asyncio
     async def test_voice_3rd_person_no_trigger(self, trigger_engine, base_context):
         """'I talked to alex yesterday' — 3rd person statement must NOT trigger."""
         chunk = TranscriptChunk(
@@ -1182,6 +1264,70 @@ class TestVoiceAddress:
         )
         assert len(triggers2) == 1
         assert "date today" in triggers2[0].relevant_transcript
+
+    @pytest.mark.asyncio
+    async def test_decision_conflict_detected_from_recent_transcript_before_context_analysis(self):
+        """An immediate decision after a concern should still fire conflict detection."""
+        trigger_engine = TriggerEngine()
+
+        context = MeetingContext(
+            meeting_id="conflict_recent_transcript",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        concern_chunk = TranscriptChunk(
+            text="I am worried about the latency issues with Kafka message batching.",
+            timestamp=datetime.now() - timedelta(seconds=2),
+            speaker="Sarah",
+        )
+        context.recent_transcript.append(concern_chunk)
+        await trigger_engine.check_for_triggers(context=context, new_chunks=[concern_chunk])
+
+        decision_chunk = TranscriptChunk(
+            text="We should use Kafka for the event pipeline.",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+        context.recent_transcript.append(decision_chunk)
+        triggers = await trigger_engine.check_for_triggers(
+            context=context,
+            new_chunks=[decision_chunk],
+        )
+
+        assert any(t.type == TriggerType.CONFLICT_DETECTED for t in triggers)
+
+    @pytest.mark.asyncio
+    async def test_repeated_confusion_detected_across_recent_turns(self):
+        """Softer confusion across nearby turns should trigger repeated confusion."""
+        trigger_engine = TriggerEngine()
+
+        context = MeetingContext(
+            meeting_id="soft_confusion_recent_turns",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        first_chunk = TranscriptChunk(
+            text="i am a bit lost on the rollback plan",
+            timestamp=datetime.now() - timedelta(seconds=3),
+            speaker="John",
+        )
+        context.recent_transcript.append(first_chunk)
+        await trigger_engine.check_for_triggers(context=context, new_chunks=[first_chunk])
+
+        second_chunk = TranscriptChunk(
+            text="can we slow down because i am not following the rollback plan",
+            timestamp=datetime.now(),
+            speaker="John",
+        )
+        context.recent_transcript.append(second_chunk)
+        triggers = await trigger_engine.check_for_triggers(
+            context=context,
+            new_chunks=[second_chunk],
+        )
+
+        assert any(t.type == TriggerType.REPEATED_CONFUSION for t in triggers)
 
 
 # =============================================================================

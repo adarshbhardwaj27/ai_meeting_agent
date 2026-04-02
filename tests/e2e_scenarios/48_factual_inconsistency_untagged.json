@@ -1,0 +1,28 @@
+{
+  "meeting_id": "factual_inconsistency_without_tag",
+  "description": "Alex should proactively flag a numeric mismatch without being explicitly asked",
+  "tags": ["intelligence", "factual", "untagged", "proactive", "numbers"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "Our API supports up to 500 requests per second.",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "The API only supports 200 requests per second right now.",
+      "is_final": true, "delay_ms": 2500,
+      "comment": "Same topic, different number -> factual inconsistency"
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "factual_inconsistency"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

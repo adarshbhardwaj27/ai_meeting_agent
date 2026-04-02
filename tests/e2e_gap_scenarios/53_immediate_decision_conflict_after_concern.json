@@ -1,0 +1,27 @@
+{
+  "meeting_id": "gap_immediate_decision_conflict_after_concern",
+  "description": "SHOULD proactively warn immediately when a decision follows a concern, instead of waiting for the context update cycle to catch up",
+  "tags": ["gap", "proactive", "conflict", "expected-fail"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I am worried about the latency issues with Kafka message batching.",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "We should use Kafka for the event pipeline.",
+      "is_final": true, "delay_ms": 1000
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "conflict_detected"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

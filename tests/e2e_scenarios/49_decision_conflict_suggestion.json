@@ -1,0 +1,32 @@
+{
+  "meeting_id": "decision_conflict_suggestion_without_tag",
+  "description": "Alex should proactively suggest caution when the team is deciding something that conflicts with an earlier concern",
+  "tags": ["proactive", "decision", "conflict", "suggestion", "untagged"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "I am worried about the latency issues with Kafka message batching.",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "wait", "delay_ms": 6000,
+      "comment": "Allow ContextEngine to promote the concern before the decision arrives"
+    },
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "We should use Kafka for the event pipeline.",
+      "is_final": true, "delay_ms": 0,
+      "comment": "Decision-forming language should conflict with the earlier latency concern"
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "conflict_detected"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

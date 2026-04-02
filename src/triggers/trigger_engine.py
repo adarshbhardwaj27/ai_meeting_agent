@@ -108,9 +108,11 @@ class TriggerEngine:
         # Confusion patterns
         self._confusion_patterns = [
             r"(?:i don't|i do not) (?:understand|get|follow)",
-            r"(?:what do you mean|can you explain|i'm confused)",
+            r"(?:what do you mean|can you explain|i(?:'m| am) confused)",
             r"(?:sorry|wait)[,]? (?:what|can you repeat)",
-            r"(?:i'm lost|lost me there)",
+            r"(?:i(?:'m| am) lost|lost me there|a bit lost)",
+            r"(?:i(?:'m| am) not following|not following)",
+            r"(?:can we slow down|slow down(?: a bit)?|too fast)",
         ]
 
         self._semantic_stopwords = {
@@ -322,6 +324,20 @@ class TriggerEngine:
         'please',
     })
 
+    _DIRECT_ADDRESS_CUE = re.compile(
+        r"(?:^|\b)(?:"
+        r"(?:i\s+(?:am|was)\s+asking)"
+        r"|(?:i['’]?m\s+asking)"
+        r"|asking"
+        r"|ask"
+        r"|(?:i\s+(?:want|wanted|need|needed|meant)\s+to\s+ask)"
+        r"|(?:i\s+(?:am|was)\s+trying\s+to\s+ask)"
+        r"|(?:let\s+me\s+ask)"
+        r"|tell"
+        r")\s*$",
+        re.IGNORECASE,
+    )
+
     def _build_voice_mention_patterns(self) -> List[re.Pattern]:
         """Build pattern to detect the bot's name at the START of speech.
 
@@ -386,12 +402,16 @@ class TriggerEngine:
         if not m:
             return None
 
+        before = text_stripped[:m.start()].strip().rstrip(',: ')
+        after  = text_stripped[m.end():].strip().lstrip(',: ')
+
+        directed_payload = self._extract_direct_address_payload(before, after)
+        if directed_payload:
+            return directed_payload
+
         # Must look like a question / command to avoid 3rd-person refs
         if not self._looks_like_question(text_stripped):
             return None
-
-        before = text_stripped[:m.start()].strip().rstrip(',: ')
-        after  = text_stripped[m.end():].strip().lstrip(',: ')
 
         if not after or after.rstrip('?!. ') == '':
             # Name at END: "what do you think alex?"
@@ -401,6 +421,34 @@ class TriggerEngine:
         else:
             # Name in MIDDLE: "can alex help with this?"
             return f"{before} {after}".strip()
+
+    def _extract_direct_address_payload(
+        self,
+        before_name_text: str,
+        after_name_text: str,
+    ) -> Optional[str]:
+        """Extract a request from phrases like 'I am asking Alex ...'."""
+        if not before_name_text or not after_name_text:
+            return None
+
+        if not self._DIRECT_ADDRESS_CUE.search(before_name_text.strip()):
+            return None
+
+        normalized_after = after_name_text.strip()
+        normalized_after = re.sub(r"^(?:please\s+)", "", normalized_after, flags=re.IGNORECASE)
+        normalized_after = re.sub(r"^(?:to\s+)", "", normalized_after, flags=re.IGNORECASE)
+        if not normalized_after:
+            return None
+
+        if self._looks_like_question(normalized_after):
+            return normalized_after
+
+        normalized_lower = normalized_after.lower()
+        for patterns in self._command_patterns.values():
+            if any(re.search(pattern, normalized_lower) for pattern in patterns):
+                return normalized_after
+
+        return None
 
     @staticmethod
     def _looks_like_question(text: str) -> bool:
@@ -662,6 +710,11 @@ class TriggerEngine:
     ) -> Optional[Trigger]:
         """Check if a decision is being made that conflicts with prior concerns."""
         text_lower = recent_text.lower()
+        transcript_concerns = self._extract_recent_transcript_concerns(context)
+        all_concerns = self._merge_concerns(
+            context.unaddressed_concerns,
+            transcript_concerns,
+        )
         
         for pattern, confidence in self._decision_patterns:
             match = re.search(pattern, text_lower)
@@ -671,7 +724,7 @@ class TriggerEngine:
                 # Look for conflicting concerns
                 conflicts = self._find_conflicting_concerns(
                     decision_text, 
-                    context.unaddressed_concerns
+                    all_concerns
                 )
                 
                 if conflicts:
@@ -702,6 +755,53 @@ class TriggerEngine:
                     return trigger
         
         return None
+
+    def _extract_recent_transcript_concerns(
+        self,
+        context: MeetingContext,
+        minutes: int = 3,
+    ) -> List[Concern]:
+        """Extract concern-like statements from recent final transcript chunks."""
+        cutoff = datetime.now() - timedelta(minutes=minutes)
+        derived: List[Concern] = []
+
+        for chunk in context.recent_transcript:
+            if not chunk.is_final or chunk.timestamp < cutoff:
+                continue
+
+            text_lower = chunk.text.lower()
+            if not any(re.search(pattern, text_lower) for pattern in self._concern_patterns):
+                continue
+
+            severity = ConcernSeverity.MEDIUM
+            if any(term in text_lower for term in ("critical", "severe", "high risk", "major")):
+                severity = ConcernSeverity.HIGH
+
+            concern = Concern.create(
+                description=chunk.text,
+                raised_by=chunk.speaker,
+                severity=severity,
+            )
+            concern.raised_at = chunk.timestamp
+            derived.append(concern)
+
+        return derived
+
+    @staticmethod
+    def _merge_concerns(*concern_groups: List[Concern]) -> List[Concern]:
+        """Merge multiple concern lists while deduplicating by description."""
+        merged: List[Concern] = []
+        seen_descriptions: Set[str] = set()
+
+        for group in concern_groups:
+            for concern in group:
+                key = concern.description.strip().lower()
+                if key in seen_descriptions:
+                    continue
+                seen_descriptions.add(key)
+                merged.append(concern)
+
+        return merged
     
     def _find_conflicting_concerns(
         self, 
@@ -923,7 +1023,8 @@ class TriggerEngine:
         recent_text: str
     ) -> Optional[Trigger]:
         """Check if the same confusion is appearing multiple times."""
-        text_lower = recent_text.lower()
+        window_text = context.get_recent_text(minutes=2) or recent_text
+        text_lower = window_text.lower()
         
         # Count confusion indicators
         confusion_count = 0
@@ -938,7 +1039,7 @@ class TriggerEngine:
                 confidence=0.65,
                 reason=f"Multiple signs of confusion detected ({confusion_count} indicators)"
             )
-            trigger.relevant_transcript = recent_text[-400:]
+            trigger.relevant_transcript = window_text[-400:]
             return trigger
         
         return None

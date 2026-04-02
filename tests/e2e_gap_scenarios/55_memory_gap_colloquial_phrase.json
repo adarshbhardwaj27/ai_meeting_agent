@@ -1,0 +1,27 @@
+{
+  "meeting_id": "gap_memory_gap_colloquial_phrase",
+  "description": "SHOULD handle colloquial recall language like 'I'm blanking on when...' as a memory-gap trigger",
+  "tags": ["gap", "memory-gap", "expected-fail"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "The deployment window is Thursday 2am to 6am.",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "i am blanking on when the deployment window is",
+      "is_final": true, "delay_ms": 3000
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "memory_gap"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

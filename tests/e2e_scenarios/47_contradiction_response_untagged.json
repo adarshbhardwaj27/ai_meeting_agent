@@ -1,0 +1,27 @@
+{
+  "meeting_id": "contradiction_response_without_tag",
+  "description": "Alex should proactively answer a contradiction between two speakers without anyone explicitly tagging it",
+  "tags": ["intelligence", "contradiction", "untagged", "proactive"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Mike",
+      "text": "Kafka can easily meet our 100 millisecond SLA.",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "Kafka cannot meet our 100 millisecond SLA because batching adds too much latency.",
+      "is_final": true, "delay_ms": 3000
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "contradiction"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

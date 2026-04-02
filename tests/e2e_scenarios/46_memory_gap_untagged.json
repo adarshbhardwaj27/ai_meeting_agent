@@ -1,0 +1,28 @@
+{
+  "meeting_id": "memory_gap_without_tag",
+  "description": "Alex should respond without being tagged when the team is trying to recall something already discussed earlier",
+  "tags": ["intelligence", "memory-gap", "untagged", "proactive"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Sarah",
+      "text": "The deployment window is Thursday 2am to 6am.",
+      "is_final": true, "delay_ms": 0
+    },
+    {
+      "type": "transcript", "speaker": "John",
+      "text": "Does anyone remember when the deployment window is?",
+      "is_final": true, "delay_ms": 3000,
+      "comment": "Memory-gap phrase should trigger Alex proactively"
+    },
+    { "type": "wait", "delay_ms": 1000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "memory_gap"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

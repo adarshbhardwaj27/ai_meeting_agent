@@ -1,0 +1,23 @@
+{
+  "meeting_id": "gap_voice_embedded_asking_statement",
+  "description": "SHOULD trigger when someone says 'I am asking Alex what things you can help me with' even though Alex is embedded inside the sentence",
+  "tags": ["gap", "voice-address", "expected-fail"],
+  "events": [
+    {
+      "type": "transcript", "speaker": "Adarsh Bhardwaj",
+      "text": "no no i am asking alex what things you can help me with",
+      "is_final": true, "delay_ms": 0
+    },
+    { "type": "wait", "delay_ms": 4000 },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "voice_address",
+      "text_contains": "what things you can help me with"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}

@@ -68,6 +68,9 @@ _MEMORY_PHRASES = re.compile(
     r"(?:(?:do(?:es)? anyone|anybody|who) (?:remember|recall|know))"
     r"|(?:what (?:did|was|were) (?:we|they|he|she) (?:say|decide|agree|mention))"
     r"|(?:i (?:can'?t|cannot|don'?t) (?:remember|recall))"
+    r"|(?:i(?:'m| am)? blanking on)"
+    r"|(?:i(?:'m| am)? drawing a blank)"
+    r"|(?:it'?s slipping my mind)"
     r"|(?:wasn'?t there (?:something|a point|a concern))"
     r"|(?:remind me (?:what|who|when|why))"
     r"|(?:did (?:we|someone|anybody) (?:already|ever) (?:discuss|mention|cover|address))",
