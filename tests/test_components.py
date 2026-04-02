@@ -16,11 +16,13 @@ from unittest.mock import Mock, AsyncMock, patch
 from src.context.models import (
     TranscriptChunk, MeetingContext, Concern, Decision,
     Trigger, TriggerType, CommandType, ConcernSeverity, DecisionStatus, Topic,
-    SignalType, SignalCandidate, AssertionRecord,
+    SignalType, SignalCandidate, AssertionRecord, AIResponse, MessagePriority,
 )
 from src.context.context_engine import ContextEngine
 from src.triggers.trigger_engine import TriggerEngine
 from src.triggers.conversation_intelligence import ConversationIntelligence
+from src.reasoning.llm_service import LLMService
+from src.chat.chat_manager import ChatManager
 
 
 # =============================================================================
@@ -137,6 +139,83 @@ class TestContextEngine:
         
         assert "Message 0" in recent
         assert "Message 1" in recent
+
+    @pytest.mark.asyncio
+    async def test_interim_chunks_not_persisted(self, context_engine):
+        """Interim transcript chunks should not pollute persistent context."""
+        interim = TranscriptChunk(
+            text="Hello the",
+            timestamp=datetime.now(),
+            speaker="John",
+            is_final=False,
+        )
+        final = TranscriptChunk(
+            text="Hello there",
+            timestamp=datetime.now(),
+            speaker="John",
+            is_final=True,
+        )
+
+        await context_engine.add_transcript_chunk(interim)
+        await context_engine.add_transcript_chunk(final)
+
+        assert len(context_engine.context.recent_transcript) == 1
+        assert context_engine.context.recent_transcript[0].text == "Hello there"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_final_chunks_ignored(self, context_engine):
+        """Duplicate final transcript chunks should only be stored once."""
+        now = datetime.now()
+        chunk1 = TranscriptChunk(
+            text="Let's review the proposal",
+            timestamp=now,
+            speaker="Sarah",
+        )
+        chunk2 = TranscriptChunk(
+            text="Let's review the proposal",
+            timestamp=now + timedelta(seconds=1),
+            speaker="Sarah",
+        )
+
+        await context_engine.add_transcript_chunk(chunk1)
+        await context_engine.add_transcript_chunk(chunk2)
+
+        assert len(context_engine.context.recent_transcript) == 1
+
+    @pytest.mark.asyncio
+    async def test_detect_action_items(self, context_engine):
+        """Action items should be extracted into structured context."""
+        context_engine.update_interval = 0.1
+        await context_engine.start()
+
+        try:
+            chunk = TranscriptChunk(
+                text="John will send the design doc by Friday.",
+                timestamp=datetime.now(),
+                speaker="Sarah",
+            )
+            await context_engine.add_transcript_chunk(chunk)
+
+            await asyncio.sleep(context_engine.update_interval + 0.3)
+
+            assert any(
+                "john: send the design doc by friday" in item.lower()
+                for item in context_engine.context.action_items
+            )
+        finally:
+            await context_engine.stop()
+
+    def test_get_context_snapshot_returns_copy(self, context_engine):
+        """Context snapshots should not expose the live mutable object."""
+        context_engine.context.open_questions.append("What is the rollout plan?")
+        context_engine.context.action_items.append("Sarah: confirm rollout date")
+
+        snapshot = context_engine.get_context_snapshot()
+        snapshot.open_questions.append("Mutated in test")
+        snapshot.action_items.append("Injected into snapshot")
+
+        assert "Mutated in test" not in context_engine.context.open_questions
+        assert "Injected into snapshot" not in context_engine.context.action_items
 
 
 # =============================================================================
@@ -1160,6 +1239,147 @@ class TestIntegration:
         finally:
             await context_engine.stop()
             await trigger_engine.stop()
+
+
+class TestChatManager:
+    """Tests for chat delivery behavior."""
+
+    @pytest.mark.asyncio
+    async def test_voice_address_bypasses_proactive_rate_limit(self):
+        """Voice-addressed answers should be treated as reactive, not proactive."""
+        bot = Mock()
+        bot.send_chat = AsyncMock(return_value=True)
+
+        manager = ChatManager(bot)
+        manager._last_proactive_time = datetime.now()
+
+        voice_trigger = Trigger.create_command(CommandType.CUSTOM, "help with this")
+        voice_trigger.type = TriggerType.VOICE_ADDRESS
+        voice_response = AIResponse.create(
+            text="Here is the answer.",
+            trigger=voice_trigger,
+            priority=MessagePriority.HIGH,
+        )
+
+        sent = await manager.send(voice_response)
+
+        assert sent is True
+        bot.send_chat.assert_awaited_once()
+
+        bot.send_chat.reset_mock()
+
+        proactive_trigger = Trigger.create_proactive(
+            TriggerType.DECISION_FORMING,
+            confidence=0.8,
+            reason="Decision is forming",
+        )
+        proactive_response = AIResponse.create(
+            text="Potential proactive note.",
+            trigger=proactive_trigger,
+        )
+
+        sent_proactive = await manager.send(proactive_response)
+
+        assert sent_proactive is False
+        bot.send_chat.assert_not_awaited()
+
+
+class TestLLMServiceFallback:
+    """Tests for deterministic local fallbacks when the LLM is unavailable."""
+
+    @pytest.fixture
+    def fallback_context(self):
+        context = MeetingContext(
+            meeting_id="fallback_test",
+            meeting_started_at=datetime.now() - timedelta(minutes=12),
+            platform="test",
+        )
+        context.current_topic = Topic(
+            name="Architecture Review",
+            started_at=datetime.now() - timedelta(minutes=5),
+        )
+        context.participants.update({"Sarah", "John"})
+        context.concerns_raised.append(
+            Concern.create(
+                description="Latency risk in the current design",
+                raised_by="Sarah",
+                severity=ConcernSeverity.HIGH,
+            )
+        )
+        context.decisions_pending.append(
+            Decision.create(
+                description="Use a caching layer for reads",
+                proposed_by="John",
+            )
+        )
+        context.action_items.append("John: send the design doc by Friday")
+        context.open_questions.append("What is the rollout plan?")
+        context.recent_transcript.extend([
+            TranscriptChunk(
+                text="We should review the architecture tradeoffs.",
+                timestamp=datetime.now() - timedelta(minutes=1),
+                speaker="Sarah",
+            ),
+            TranscriptChunk(
+                text="John will send the design doc by Friday.",
+                timestamp=datetime.now() - timedelta(seconds=30),
+                speaker="Sarah",
+            ),
+        ])
+        return context
+
+    @pytest.mark.asyncio
+    async def test_summary_command_uses_local_fallback(self, fallback_context):
+        """Summaries should still work from local context when the LLM is down."""
+        service = LLMService()
+        service._client = None
+
+        trigger = Trigger.create_command(CommandType.SUMMARIZE)
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert "Topic:" in response.text or "Decisions:" in response.text
+
+    @pytest.mark.asyncio
+    async def test_action_items_command_uses_local_fallback(self, fallback_context):
+        """Action items should come from structured context without the LLM."""
+        service = LLMService()
+        service._client = None
+
+        trigger = Trigger.create_command(CommandType.ACTION_ITEMS)
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert "Action:" in response.text
+        assert "design doc" in response.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_proactive_trigger_skips_without_llm(self, fallback_context):
+        """Proactive messages should stay silent instead of sending generic fallback text."""
+        service = LLMService()
+        service._client = None
+
+        trigger = Trigger.create_proactive(
+            TriggerType.CONTRADICTION,
+            confidence=0.8,
+            reason="Statements conflict",
+        )
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is None
 
 
 # =============================================================================

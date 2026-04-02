@@ -15,7 +15,7 @@ import asyncio
 import argparse
 import signal
 from datetime import datetime
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Coroutine, Any
 import structlog
 
 from src.config import config
@@ -96,6 +96,7 @@ class MeetingAssistant:
         self._main_loop_task: Optional[asyncio.Task] = None
         self._new_chunks: List[TranscriptChunk] = []
         self._chunk_lock = asyncio.Lock()
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Session logger (append-mode file log for post-meeting analysis)
         self.meeting_logger: Optional[MeetingLogger] = None
@@ -233,6 +234,8 @@ class MeetingAssistant:
             except asyncio.CancelledError:
                 pass
 
+        await self._cancel_background_tasks()
+
         if self.caption_scraper:
             await self.caption_scraper.stop()
 
@@ -354,6 +357,9 @@ class MeetingAssistant:
 
     def _on_transcript_chunk(self, chunk: TranscriptChunk):
         """Called by CaptionScraper when a new caption line appears."""
+        if not self.context_engine:
+            return
+
         # Log to session file
         if self.meeting_logger:
             self.meeting_logger.transcript(
@@ -361,21 +367,73 @@ class MeetingAssistant:
                 text=chunk.text,
                 is_final=chunk.is_final,
             )
-        asyncio.create_task(self.context_engine.add_transcript_chunk(chunk))
-        asyncio.create_task(self._add_chunk(chunk))
+        self._spawn_background_task(
+            self.context_engine.add_transcript_chunk(chunk),
+            label="context.add_transcript_chunk",
+        )
+        self._spawn_background_task(
+            self._add_chunk(chunk),
+            label="assistant.add_chunk",
+        )
 
     async def _add_chunk(self, chunk: TranscriptChunk):
         async with self._chunk_lock:
             self._new_chunks.append(chunk)
 
+    def _spawn_background_task(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        *,
+        label: str,
+    ) -> asyncio.Task:
+        """Create a tracked background task so failures are not silent."""
+        task = asyncio.create_task(coro, name=label)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return task
+
+    def _on_background_task_done(self, task: asyncio.Task):
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as e:
+            logger.error(
+                "background_task_failed",
+                task_name=task.get_name(),
+                error=str(e),
+            )
+
+    async def _cancel_background_tasks(self):
+        """Cancel and await all tracked background work."""
+        if not self._background_tasks:
+            return
+
+        tasks = list(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
     def _on_chat_message(self, sender: str, text: str):
         """Called when someone sends a chat message in the meeting."""
+        if not self.chat_manager or not self.context_engine:
+            return
+
         self.chat_manager.notify_user_message()
-        asyncio.create_task(self.context_engine.add_chat_message(sender, text))
+        self._spawn_background_task(
+            self.context_engine.add_chat_message(sender, text),
+            label="context.add_chat_message",
+        )
 
         bot_name = config.bot.name.lower()
         if f"@{bot_name}" in text.lower():
-            asyncio.create_task(self._process_command(sender, text))
+            self._spawn_background_task(
+                self._process_command(sender, text),
+                label="assistant.process_command",
+            )
 
     async def _process_command(self, sender: str, text: str):
         if not self.context_engine or not self.trigger_engine:

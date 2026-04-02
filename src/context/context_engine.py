@@ -9,6 +9,7 @@ This engine maintains a continuous understanding of the meeting by:
 """
 
 import asyncio
+import copy
 from collections import deque
 from datetime import datetime, timedelta
 from typing import List, Optional, Callable, Deque
@@ -53,7 +54,8 @@ class ContextEngine:
         )
         
         # Processing buffers
-        self._chunk_buffer: Deque[TranscriptChunk] = deque()
+        # Keep a bounded processing buffer even if pruning is delayed.
+        self._chunk_buffer: Deque[TranscriptChunk] = deque(maxlen=1000)
         self._pending_analysis = False
         
         # Background task handle
@@ -80,6 +82,29 @@ class ContextEngine:
             r"(?:what|how|why|when|where|who|can|could|should|would) .+\?",
             r"(?:does anyone|has anyone|is there) .+\?",
         ]
+
+        self._action_item_patterns = [
+            re.compile(
+                r"\b(?P<owner>[A-Za-z][A-Za-z]+(?:\s+[A-Za-z][A-Za-z]+)*)\s+"
+                r"(?:will|needs to)\s+(?P<task>[^.?!]+?)"
+                r"(?:\s+by\s+(?P<due>[^.?!]+))?(?:[.?!]|$)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\b(?:i will|i'll)\s+(?P<task>[^.?!]+?)"
+                r"(?:\s+by\s+(?P<due>[^.?!]+))?(?:[.?!]|$)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bwe need to\s+(?P<task>[^.?!]+?)"
+                r"(?:\s+by\s+(?P<due>[^.?!]+))?(?:[.?!]|$)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\baction items?:\s*(?P<task>[^.?!]+?)(?:[.?!]|$)",
+                re.IGNORECASE,
+            ),
+        ]
     
     async def start(self):
         """Start the context engine background processing."""
@@ -103,15 +128,41 @@ class ContextEngine:
         Add a new transcript chunk to be processed.
         This is called frequently as speech is transcribed.
         """
-        self._chunk_buffer.append(chunk)
-        
-        # Add to recent transcript immediately
-        self.context.recent_transcript.append(chunk)
-        
         # Track participant
         if chunk.speaker:
             self.context.participants.add(chunk.speaker)
             self.context.active_speaker = chunk.speaker
+
+        # Ignore interim chunks in persistent context memory. They are useful
+        # for live trigger heartbeat handling, but they add noise and duplicates
+        # to prompt context.
+        if not chunk.is_final:
+            logger.debug(
+                "transcript_chunk_skipped_interim",
+                text=chunk.text[:50],
+                speaker=chunk.speaker,
+            )
+            return
+
+        # Ignore duplicate final chunks from the same speaker that arrive
+        # within a short window. Some transcript providers resend finals.
+        if self.context.recent_transcript:
+            last_chunk = self.context.recent_transcript[-1]
+            if (
+                last_chunk.is_final
+                and last_chunk.speaker == chunk.speaker
+                and last_chunk.text == chunk.text
+                and abs((chunk.timestamp - last_chunk.timestamp).total_seconds()) <= 2
+            ):
+                logger.debug(
+                    "duplicate_final_chunk_ignored",
+                    text=chunk.text[:50],
+                    speaker=chunk.speaker,
+                )
+                return
+
+        self._chunk_buffer.append(chunk)
+        self.context.recent_transcript.append(chunk)
         
         # Mark that we have pending analysis
         self._pending_analysis = True
@@ -162,8 +213,10 @@ class ContextEngine:
         Analyze recent transcript for state changes.
         This runs every few seconds to keep context up-to-date.
         """
+        recent_chunks = self._get_recent_unprocessed_chunks()
+
         # Get recent unprocessed text
-        recent_text = self._get_recent_unprocessed_text()
+        recent_text = self._get_recent_unprocessed_text(recent_chunks)
         if not recent_text:
             return
         
@@ -178,6 +231,9 @@ class ContextEngine:
         
         # Detect open questions
         await self._detect_questions(recent_text)
+
+        # Detect action items / follow-ups
+        await self._detect_action_items(recent_chunks)
         
         logger.debug(
             "context_analyzed",
@@ -186,12 +242,17 @@ class ContextEngine:
             confirmed_decisions=len(self.context.decisions_confirmed)
         )
     
-    def _get_recent_unprocessed_text(self) -> str:
+    def _get_recent_unprocessed_chunks(self) -> List[TranscriptChunk]:
+        """Get recent final chunks that should feed context analysis."""
+        return [c for c in list(self._chunk_buffer)[-20:] if c.is_final]
+
+    def _get_recent_unprocessed_text(
+        self,
+        recent_chunks: Optional[List[TranscriptChunk]] = None,
+    ) -> str:
         """Get text from chunks that haven't been fully analyzed."""
-        # For now, just get last few chunks
-        # In production, track which chunks have been processed
-        recent_chunks = list(self._chunk_buffer)[-20:]
-        return " ".join(c.text for c in recent_chunks if c.is_final)
+        chunks = recent_chunks or self._get_recent_unprocessed_chunks()
+        return " ".join(c.text for c in chunks)
     
     async def _detect_concerns(self, text: str):
         """Detect concerns or risks mentioned in the text."""
@@ -348,6 +409,48 @@ class ContextEngine:
                     # Keep only recent questions (max 10)
                     if len(self.context.open_questions) > 10:
                         self.context.open_questions.pop(0)
+
+    async def _detect_action_items(self, chunks: List[TranscriptChunk]):
+        """Detect concrete follow-up tasks mentioned in recent speech."""
+        for chunk in chunks:
+            sentence = chunk.text.strip()
+            if not sentence:
+                continue
+
+            for pattern in self._action_item_patterns:
+                for match in pattern.finditer(sentence):
+                    owner = (match.groupdict().get("owner") or "").strip()
+                    task = (match.groupdict().get("task") or "").strip(" ,")
+                    due = (match.groupdict().get("due") or "").strip(" ,")
+
+                    if not task:
+                        continue
+
+                    if not owner:
+                        if re.match(r"\b(?:i will|i'll)\b", sentence, re.IGNORECASE):
+                            owner = chunk.speaker or "Someone"
+                        elif re.match(r"\bwe need to\b", sentence, re.IGNORECASE):
+                            owner = "Team"
+                        else:
+                            owner = chunk.speaker or "Team"
+
+                    action_item = f"{owner}: {task}"
+                    if due:
+                        action_item += f" by {due}"
+
+                    if action_item.lower() in [item.lower() for item in self.context.action_items]:
+                        continue
+
+                    self.context.action_items.append(action_item)
+                    if len(self.context.action_items) > 15:
+                        self.context.action_items.pop(0)
+
+                    logger.info(
+                        "action_item_detected",
+                        owner=owner,
+                        task=task,
+                        due=due or None,
+                    )
     
     async def _prune_sliding_window(self):
         """Remove transcript chunks outside the sliding window."""
@@ -362,6 +465,11 @@ class ContextEngine:
             c for c in self.context.recent_transcript 
             if c.timestamp >= cutoff
         ]
+
+        self._chunk_buffer = deque(
+            (c for c in self._chunk_buffer if c.timestamp >= cutoff),
+            maxlen=1000,
+        )
         
         # Compress old chunks into summary (if significant)
         if old_chunks and len(old_chunks) >= 10:
@@ -372,15 +480,41 @@ class ContextEngine:
         Compress old transcript chunks into the historical summary.
         
         In production, this would use an LLM to create a concise summary.
-        For the MVP, we use a simple text concatenation with truncation.
+        For the MVP, keep a structured highlight reel with speaker attribution
+        instead of raw text concatenation.
         """
-        old_text = " ".join(c.text for c in chunks)
-        
-        # Simple compression: keep first and last parts
-        if len(old_text) > 500:
-            compressed = old_text[:250] + " ... " + old_text[-250:]
+        final_chunks = [c for c in chunks if c.is_final and c.text.strip()]
+        if not final_chunks:
+            return
+
+        deduped_chunks: List[TranscriptChunk] = []
+        for chunk in final_chunks:
+            if (
+                deduped_chunks
+                and deduped_chunks[-1].speaker == chunk.speaker
+                and deduped_chunks[-1].text == chunk.text
+            ):
+                continue
+            deduped_chunks.append(chunk)
+
+        if len(deduped_chunks) <= 6:
+            selected_chunks = deduped_chunks
         else:
-            compressed = old_text
+            selected_chunks = deduped_chunks[:3] + deduped_chunks[-3:]
+
+        highlights = []
+        for chunk in selected_chunks:
+            speaker = chunk.speaker or "Unknown"
+            text = chunk.text.strip()
+            if len(text) > 90:
+                text = text[:87] + "..."
+            highlights.append(f"[{speaker}] {text}")
+
+        omitted = len(deduped_chunks) - len(selected_chunks)
+        if omitted > 0:
+            highlights.append(f"[{omitted} earlier utterances omitted]")
+
+        compressed = " | ".join(highlights)
         
         # Append to historical summary
         if self.context.historical_summary:
@@ -403,7 +537,7 @@ class ContextEngine:
     
     def get_context_snapshot(self) -> MeetingContext:
         """Get a snapshot of the current context."""
-        return self.context
+        return copy.deepcopy(self.context)
     
     def get_formatted_context(self) -> str:
         """Get a formatted string representation of the context for LLM."""
@@ -437,6 +571,12 @@ class ContextEngine:
         if ctx.decisions_confirmed:
             confirmed_text = "; ".join(d.description for d in ctx.decisions_confirmed[:5])
             parts.append(f"Confirmed Decisions: {confirmed_text}")
+
+        if ctx.open_questions:
+            parts.append(f"Open Questions: {'; '.join(ctx.open_questions[:5])}")
+
+        if ctx.action_items:
+            parts.append(f"Action Items: {'; '.join(ctx.action_items[:5])}")
         
         if ctx.historical_summary:
             parts.append(f"\nHistorical Summary:\n{ctx.historical_summary}")

@@ -184,7 +184,10 @@ class MeetingContext:
     def get_recent_text(self, minutes: int = 3) -> str:
         """Get transcript text from the last N minutes."""
         cutoff = datetime.now() - timedelta(minutes=minutes)
-        chunks = [c for c in self.recent_transcript if c.timestamp >= cutoff]
+        chunks = [
+            c for c in self.recent_transcript
+            if c.timestamp >= cutoff and c.is_final
+        ]
         return " ".join(c.text for c in chunks)
     
     def get_context_for_llm(self) -> Dict[str, Any]:
@@ -202,6 +205,8 @@ class MeetingContext:
                 for d in self.decisions_pending
             ],
             "confirmed_decisions": [d.description for d in self.decisions_confirmed],
+            "open_questions": self.open_questions[:5],
+            "action_items": self.action_items[:5],
             "participants": list(self.participants),
             "historical_summary": self.historical_summary,
         }

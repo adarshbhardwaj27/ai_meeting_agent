@@ -241,9 +241,15 @@ class LLMService:
         
         # Call LLM
         response_text = await self._call_llm(system_prompt, user_prompt)
-        
+
         if response_text is None:
-            return None
+            response_text = self._build_local_fallback_response(
+                trigger=trigger,
+                context=context,
+                recent_transcript=recent_transcript,
+            )
+            if response_text is None:
+                return None
         
         # Check for SKIP response
         if response_text.strip().upper() == "SKIP" or not response_text.strip():
@@ -307,6 +313,14 @@ class LLMService:
             decisions = [f"- {d.description} ({d.status.value})" 
                         for d in context.decisions_pending[:3]]
             parts.append(f"Pending Decisions:\n" + "\n".join(decisions))
+
+        if context.open_questions:
+            questions = [f"- {question}" for question in context.open_questions[:3]]
+            parts.append(f"Open Questions:\n" + "\n".join(questions))
+
+        if context.action_items:
+            action_items = [f"- {item}" for item in context.action_items[:3]]
+            parts.append(f"Action Items:\n" + "\n".join(action_items))
         
         if context.historical_summary:
             parts.append(f"\nHistorical Summary:\n{context.historical_summary[:500]}")
@@ -356,8 +370,8 @@ class LLMService:
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         """Call the LLM and return the response text."""
         if self._client is None:
-            logger.error("llm_client_not_initialized")
-            return self._fallback_response()
+            logger.warning("llm_client_not_initialized")
+            return None
         
         try:
             if self.provider in (LLMProvider.OPENAI, LLMProvider.AZURE_OPENAI):
@@ -384,10 +398,91 @@ class LLMService:
         except Exception as e:
             logger.error("llm_call_failed", error=str(e))
             return None
-    
-    def _fallback_response(self) -> str:
-        """Generate a fallback response when LLM is unavailable."""
-        return "I'm having trouble processing right now. Please try again."
+
+    def _build_local_fallback_response(
+        self,
+        trigger: Trigger,
+        context: MeetingContext,
+        recent_transcript: str,
+    ) -> Optional[str]:
+        """Build a deterministic fallback when the LLM is unavailable.
+
+        For proactive triggers, silence is safer than a generic low-confidence
+        reply. For direct user requests, respond from local structured context
+        whenever possible.
+        """
+        if trigger.type not in (TriggerType.EXPLICIT_COMMAND, TriggerType.VOICE_ADDRESS):
+            logger.info("llm_unavailable_skipping_proactive", trigger=trigger.type.value)
+            return None
+
+        command_type = trigger.command_type or CommandType.CUSTOM
+
+        if command_type == CommandType.SUMMARIZE:
+            return self._fallback_summary(context, recent_transcript)
+        if command_type == CommandType.RISKS:
+            return self._fallback_risks(context)
+        if command_type == CommandType.DECISION:
+            return self._fallback_decision(context)
+        if command_type == CommandType.ACTION_ITEMS:
+            return self._fallback_action_items(context)
+        if command_type in (CommandType.EXPLAIN, CommandType.CUSTOM):
+            request_text = (trigger.command_args or trigger.relevant_transcript or "that").strip()
+            if len(request_text) > 80:
+                request_text = request_text[:77] + "..."
+            return (
+                f"I heard the question about '{request_text}', but detailed Q&A isn't available right now. "
+                f"I can still help with summaries, risks, decisions, and action items."
+            )
+
+        return "I don't have a reliable local answer for that yet."
+
+    def _fallback_summary(self, context: MeetingContext, recent_transcript: str) -> str:
+        """Build a concise summary from local structured context."""
+        parts = []
+
+        if context.current_topic:
+            parts.append(f"Topic: {context.current_topic.name}")
+
+        decisions = context.decisions_confirmed[-1:] + context.decisions_pending[:1]
+        if decisions:
+            decision_text = "; ".join(d.description for d in decisions[:2])
+            parts.append(f"Decisions: {decision_text}")
+
+        if context.unaddressed_concerns:
+            concerns = "; ".join(c.description for c in context.unaddressed_concerns[:2])
+            parts.append(f"Concerns: {concerns}")
+
+        if context.action_items:
+            parts.append(f"Next: {context.action_items[0]}")
+
+        if not parts and recent_transcript.strip():
+            snippet = recent_transcript.strip()
+            if len(snippet) > 180:
+                snippet = snippet[-180:]
+            parts.append(f"Recent discussion: {snippet}")
+
+        return "\n".join(parts[:3]) or "No strong meeting context captured yet."
+
+    def _fallback_risks(self, context: MeetingContext) -> str:
+        concerns = context.high_priority_concerns or context.unaddressed_concerns
+        if not concerns:
+            return "No major open risks captured yet."
+        lines = [f"Risk: {concern.description}" for concern in concerns[:3]]
+        return "\n".join(lines)
+
+    def _fallback_decision(self, context: MeetingContext) -> str:
+        if context.decisions_confirmed:
+            decision = context.decisions_confirmed[-1]
+            return f"Confirmed decision: {decision.description}"
+        if context.decisions_pending:
+            decision = context.decisions_pending[-1]
+            return f"Current direction: {decision.description} ({decision.status.value})"
+        return "No clear decision captured yet."
+
+    def _fallback_action_items(self, context: MeetingContext) -> str:
+        if not context.action_items:
+            return "No action items captured yet."
+        return "\n".join(f"Action: {item}" for item in context.action_items[:3])
     
     def _enforce_constraints(self, text: str) -> str:
         """Enforce message length and formatting constraints."""

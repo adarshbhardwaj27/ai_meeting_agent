@@ -15,7 +15,7 @@ from collections import deque
 import structlog
 
 from src.config import config
-from src.context.models import AIResponse, MessagePriority
+from src.context.models import AIResponse, MessagePriority, TriggerType
 from src.bot.base_bot import BaseMeetingBot
 
 logger = structlog.get_logger()
@@ -77,7 +77,10 @@ class ChatManager:
         Returns:
             True if sent, False if blocked by rate limiting
         """
-        is_reactive = response.trigger.type.value == "explicit_command"
+        is_reactive = response.trigger.type in {
+            TriggerType.EXPLICIT_COMMAND,
+            TriggerType.VOICE_ADDRESS,
+        }
         
         # Check rate limiting
         if not is_reactive and not self._can_send_proactive():
