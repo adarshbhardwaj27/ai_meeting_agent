@@ -10,6 +10,7 @@ Includes:
 import pytest
 import asyncio
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock, patch
 
 # Import components
@@ -24,6 +25,7 @@ from src.triggers.conversation_intelligence import ConversationIntelligence
 from src.reasoning.llm_service import LLMService
 from src.reasoning.speech_service import SpeechService
 from src.chat.chat_manager import ChatManager
+from src.config import LLMProvider
 
 
 # =============================================================================
@@ -123,6 +125,57 @@ class TestContextEngine:
         # Old chunk should be removed
         texts = [c.text for c in context_engine.context.recent_transcript]
         assert "This is new" in texts
+
+    @pytest.mark.asyncio
+    async def test_compress_to_summary_uses_llm_summarizer_when_threshold_met(self):
+        """Older transcript batches should use the injected summarizer when large enough."""
+        calls = []
+
+        async def summarize(existing_summary, chunks):
+            calls.append((existing_summary, [chunk.text for chunk in chunks]))
+            return (
+                "Summary: The team compared cloud provider options for the new system.\n"
+                "Decisions: None\n"
+                "Open Questions: Which provider to choose.\n"
+                "Risks: Budget constraints.\n"
+                "Action Items: None"
+            )
+
+        engine = ContextEngine(
+            meeting_id="summary_test",
+            platform="test",
+            summary_update_threshold=20,
+            context_summarizer=summarize,
+        )
+
+        chunks = [
+            TranscriptChunk(
+                text="We should compare AWS, Azure, and GCP for the new architecture.",
+                timestamp=datetime.now() - timedelta(minutes=20),
+                speaker="John",
+            ),
+            TranscriptChunk(
+                text="Our budget is constrained, so cost matters a lot.",
+                timestamp=datetime.now() - timedelta(minutes=19),
+                speaker="Sarah",
+            ),
+            TranscriptChunk(
+                text="We have not decided which provider to use yet.",
+                timestamp=datetime.now() - timedelta(minutes=18),
+                speaker="Mike",
+            ),
+            TranscriptChunk(
+                text="We need to keep the summary clean for later prompts.",
+                timestamp=datetime.now() - timedelta(minutes=17),
+                speaker="John",
+            ),
+        ]
+
+        await engine._compress_to_summary(chunks)
+
+        assert calls
+        assert engine.context.historical_summary.startswith("Summary:")
+        assert "Budget constraints" in engine.context.historical_summary
     
     def test_get_recent_text(self, context_engine):
         """Test getting recent transcript text."""
@@ -1925,6 +1978,96 @@ class TestLLMServiceFallback:
 
         assert response is not None
         assert response.text == "Your name is Adarsh Bhardwaj."
+
+    @pytest.mark.asyncio
+    async def test_context_summary_is_sanitized_into_fixed_sections(self):
+        """Historical context summarization should normalize the LLM output into stable sections."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(
+            return_value=(
+                "**Decisions:** None\n"
+                "Summary: The team discussed cloud provider tradeoffs.\n"
+                "Risks: Budget constraints and migration complexity.\n"
+                "Action Items: John to share cost estimates."
+            )
+        )
+
+        chunks = [
+            TranscriptChunk(
+                text="We should compare cloud providers for the migration.",
+                timestamp=datetime.now() - timedelta(minutes=12),
+                speaker="John",
+            ),
+            TranscriptChunk(
+                text="Budget is a major concern for this rollout.",
+                timestamp=datetime.now() - timedelta(minutes=11),
+                speaker="Sarah",
+            ),
+        ]
+
+        summary = await service.summarize_context("", chunks)
+
+        assert summary is not None
+        assert summary.startswith("Summary: The team discussed cloud provider tradeoffs.")
+        assert "Decisions: None" in summary
+        assert "Open Questions: None" in summary
+        assert "Risks: Budget constraints and migration complexity." in summary
+        assert "Action Items: John to share cost estimates." in summary
+
+    @pytest.mark.asyncio
+    async def test_context_summary_passes_model_override_when_configured(self):
+        """Background context cleanup should use its dedicated model when configured."""
+        service = LLMService()
+        service._client = object()
+        service._summary_model = "gpt-4o-mini"
+        service._call_llm = AsyncMock(
+            return_value=(
+                "Summary: Team reviewed cloud costs.\n"
+                "Decisions: None\n"
+                "Open Questions: None\n"
+                "Risks: Budget pressure.\n"
+                "Action Items: None"
+            )
+        )
+
+        chunks = [
+            TranscriptChunk(
+                text="We need a cheaper model for background summarization.",
+                timestamp=datetime.now() - timedelta(minutes=5),
+                speaker="Adarsh",
+            )
+        ]
+
+        await service.summarize_context("", chunks)
+
+        assert service._call_llm.await_args.kwargs["model_override"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_call_llm_uses_model_override_for_openai(self):
+        """Model overrides should be honored at the client call site."""
+        create = AsyncMock(
+            return_value=SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+            )
+        )
+        service = LLMService()
+        service.provider = LLMProvider.OPENAI
+        service._model = "primary-model"
+        service._client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create)
+            )
+        )
+
+        result = await service._call_llm(
+            "system",
+            "user",
+            model_override="summary-model",
+        )
+
+        assert result == "ok"
+        assert create.await_args.kwargs["model"] == "summary-model"
 
 
 class TestSpeechService:

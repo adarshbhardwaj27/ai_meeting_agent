@@ -12,7 +12,7 @@ import asyncio
 import copy
 from collections import deque
 from datetime import datetime, timedelta
-from typing import List, Optional, Callable, Deque
+from typing import List, Optional, Callable, Deque, Awaitable
 import re
 import structlog
 
@@ -40,11 +40,21 @@ class ContextEngine:
         platform: str,
         window_minutes: int = None,
         update_interval: float = None,
-        on_context_updated: Optional[Callable[[MeetingContext], None]] = None
+        on_context_updated: Optional[Callable[[MeetingContext], None]] = None,
+        summary_update_threshold: int = None,
+        context_summarizer: Optional[
+            Callable[[str, List[TranscriptChunk]], Awaitable[Optional[str]]]
+        ] = None,
     ):
         self.window_minutes = window_minutes or config.context.window_minutes
         self.update_interval = update_interval or config.context.update_interval_seconds
+        self.summary_update_threshold = (
+            summary_update_threshold or config.context.summary_update_threshold
+        )
         self.on_context_updated = on_context_updated
+        self._context_summarizer = context_summarizer
+        self._last_llm_summary_at: Optional[datetime] = None
+        self._llm_summary_cooldown_seconds = 60
         
         # Initialize context
         self.context = MeetingContext(
@@ -479,9 +489,8 @@ class ContextEngine:
         """
         Compress old transcript chunks into the historical summary.
         
-        In production, this would use an LLM to create a concise summary.
-        For the MVP, keep a structured highlight reel with speaker attribution
-        instead of raw text concatenation.
+        Use the configured summarizer for larger accumulated context, and
+        fall back to a deterministic highlight reel for smaller batches.
         """
         final_chunks = [c for c in chunks if c.is_final and c.text.strip()]
         if not final_chunks:
@@ -496,6 +505,21 @@ class ContextEngine:
             ):
                 continue
             deduped_chunks.append(chunk)
+
+        if not deduped_chunks:
+            return
+
+        llm_summary = await self._summarize_with_llm(deduped_chunks)
+        if llm_summary:
+            self.context.historical_summary = llm_summary
+            self._last_llm_summary_at = datetime.now()
+            logger.debug(
+                "summary_compressed",
+                chunks_compressed=len(chunks),
+                summary_length=len(self.context.historical_summary),
+                mode="llm",
+            )
+            return
 
         if len(deduped_chunks) <= 6:
             selected_chunks = deduped_chunks
@@ -532,8 +556,44 @@ class ContextEngine:
         logger.debug(
             "summary_compressed",
             chunks_compressed=len(chunks),
-            summary_length=len(self.context.historical_summary)
+            summary_length=len(self.context.historical_summary),
+            mode="fallback",
         )
+
+    async def _summarize_with_llm(self, chunks: List[TranscriptChunk]) -> Optional[str]:
+        """Use the injected summarizer when enough older context has accumulated."""
+        if not self._context_summarizer:
+            return None
+
+        now = datetime.now()
+        if self._last_llm_summary_at and (
+            now - self._last_llm_summary_at
+        ).total_seconds() < self._llm_summary_cooldown_seconds:
+            return None
+
+        existing_estimate = self._estimate_summary_tokens(self.context.historical_summary)
+        batch_estimate = self._estimate_summary_tokens(chunks)
+        combined_estimate = existing_estimate + batch_estimate
+
+        if batch_estimate < max(80, self.summary_update_threshold // 4):
+            if combined_estimate < self.summary_update_threshold:
+                return None
+            if len(chunks) < 4:
+                return None
+
+        try:
+            return await self._context_summarizer(self.context.historical_summary, chunks)
+        except Exception as e:
+            logger.warning("context_llm_summary_failed", error=str(e))
+            return None
+
+    @staticmethod
+    def _estimate_summary_tokens(text_or_chunks) -> int:
+        """Approximate token usage cheaply so summary cleanup stays budget-aware."""
+        if isinstance(text_or_chunks, str):
+            return max(0, len(text_or_chunks) // 4)
+
+        return sum(max(1, len((chunk.text or "").strip()) // 4) for chunk in text_or_chunks)
     
     def get_context_snapshot(self) -> MeetingContext:
         """Get a snapshot of the current context."""

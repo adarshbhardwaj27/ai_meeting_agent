@@ -11,13 +11,14 @@ All outputs are constrained to be 1-3 lines, neutral, and easy to ignore.
 
 import asyncio
 import re
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 import structlog
 
 from src.config import config, LLMProvider
 from src.context.models import (
-    MeetingContext, Trigger, TriggerType, CommandType, AIResponse, MessagePriority
+    MeetingContext, Trigger, TriggerType, CommandType, AIResponse, MessagePriority,
+    TranscriptChunk,
 )
 
 logger = structlog.get_logger()
@@ -182,6 +183,7 @@ class LLMService:
         self.bot_name = config.bot.name
         self.max_chars = config.chat.max_chars
         self.max_lines = config.chat.max_lines
+        self._summary_model = (config.llm.context_summary_model or "").strip() or None
         
         # Initialize the appropriate client
         self._client = None
@@ -291,6 +293,67 @@ class LLMService:
         )
         
         return response
+
+    async def summarize_context(
+        self,
+        existing_summary: str,
+        chunks: List[TranscriptChunk],
+    ) -> Optional[str]:
+        """Compress older transcript into a persistent structured meeting memory."""
+        if self._client is None or not chunks:
+            return None
+
+        transcript_lines = []
+        for chunk in chunks:
+            text = " ".join((chunk.text or "").split()).strip()
+            if not text:
+                continue
+            speaker = chunk.speaker or "Unknown"
+            transcript_lines.append(f"[{speaker}] {text}")
+
+        if not transcript_lines:
+            return None
+
+        if len(transcript_lines) > 16:
+            transcript_lines = (
+                transcript_lines[:6]
+                + [f"[{len(transcript_lines) - 12} intermediate utterances omitted]"]
+                + transcript_lines[-6:]
+            )
+
+        system_prompt = (
+            "You compress meeting history into a clean persistent memory for later LLM use.\n"
+            "Rules:\n"
+            "- Remove filler, greetings, wake words, duplicate transcript fragments, and ASR noise\n"
+            "- Keep only durable facts: topic, options compared, decisions, open questions, risks, and action items\n"
+            "- Preserve uncertainty; if no decision is made, say that explicitly\n"
+            "- Do not invent details not present in the transcript or prior memory\n"
+            "- Output plain text with exactly these five lines:\n"
+            "Summary: ...\n"
+            "Decisions: ...\n"
+            "Open Questions: ...\n"
+            "Risks: ...\n"
+            "Action Items: ...\n"
+            "- Use 'None' if a section has nothing meaningful\n"
+            "- Keep the full output under 900 characters"
+        )
+
+        user_prompt = (
+            "Existing persistent meeting memory:\n"
+            f"{(existing_summary or 'None')[:1200]}\n\n"
+            "New older transcript to merge:\n"
+            f"{'\n'.join(transcript_lines)}\n\n"
+            "Rewrite the persistent meeting memory now."
+        )
+
+        response_text = await self._call_llm(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=260,
+            temperature=0.2,
+            model_override=self._summary_model,
+        )
+        return self._sanitize_context_summary(response_text)
 
     def _build_fast_voice_response(
         self,
@@ -434,33 +497,40 @@ class LLMService:
         system_prompt: str,
         user_prompt: str,
         trigger: Optional[Trigger] = None,
+        max_tokens_override: Optional[int] = None,
+        temperature: float = 0.7,
+        model_override: Optional[str] = None,
     ) -> Optional[str]:
         """Call the LLM and return the response text."""
         if self._client is None:
             logger.warning("llm_client_not_initialized")
             return None
 
-        max_tokens = 80 if trigger and trigger.type == TriggerType.VOICE_ADDRESS else 150
+        max_tokens = max_tokens_override or (
+            80 if trigger and trigger.type == TriggerType.VOICE_ADDRESS else 150
+        )
+        model_name = model_override or self._model
         
         try:
             if self.provider in (LLMProvider.OPENAI, LLMProvider.AZURE_OPENAI):
                 response = await self._client.chat.completions.create(
-                    model=self._model,
+                    model=model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
                     max_tokens=max_tokens,
-                    temperature=0.7,
+                    temperature=temperature,
                 )
                 return response.choices[0].message.content
                 
             elif self.provider == LLMProvider.ANTHROPIC:
                 response = await self._client.messages.create(
-                    model=self._model,
+                    model=model_name,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_prompt}],
                     max_tokens=max_tokens,
+                    temperature=temperature,
                 )
                 return response.content[0].text
                 
@@ -764,6 +834,43 @@ class LLMService:
         if not context.action_items:
             return "No action items captured yet."
         return "\n".join(f"Action: {item}" for item in context.action_items[:3])
+
+    def _sanitize_context_summary(self, text: Optional[str]) -> Optional[str]:
+        """Normalize LLM-compressed historical summary into a fixed plain-text schema."""
+        if not text or not text.strip():
+            return None
+
+        cleaned = text.replace("**", "").replace("`", "").strip()
+        cleaned_lines = [line.strip().lstrip("-*• ").strip() for line in cleaned.splitlines() if line.strip()]
+
+        prefixes = {
+            "summary": "Summary",
+            "decisions": "Decisions",
+            "open questions": "Open Questions",
+            "risks": "Risks",
+            "action items": "Action Items",
+        }
+        sections: Dict[str, str] = {}
+
+        for line in cleaned_lines:
+            if ":" not in line:
+                continue
+            raw_key, raw_value = line.split(":", 1)
+            normalized_key = raw_key.strip().lower()
+            if normalized_key in prefixes and normalized_key not in sections:
+                sections[normalized_key] = " ".join(raw_value.split()).strip() or "None"
+
+        if not sections:
+            sections["summary"] = " ".join(cleaned.split())[:300] or "None"
+
+        ordered_lines = []
+        for key in ("summary", "decisions", "open questions", "risks", "action items"):
+            ordered_lines.append(f"{prefixes[key]}: {sections.get(key, 'None')}")
+
+        normalized = "\n".join(ordered_lines)
+        if len(normalized) > 1000:
+            normalized = normalized[:997].rstrip() + "..."
+        return normalized
     
     def _enforce_constraints(self, text: str) -> str:
         """Enforce message length and formatting constraints."""

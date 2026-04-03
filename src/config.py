@@ -43,6 +43,9 @@ class LLMConfig:
     openai_model: str = field(
         default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
     )
+    context_summary_model: Optional[str] = field(
+        default_factory=lambda: os.getenv("CONTEXT_SUMMARY_MODEL")
+    )
     # Anthropic
     anthropic_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")

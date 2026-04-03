@@ -17,7 +17,7 @@ What's real:
   • ChatManager                   (production rate-limiting, formatting)
 
 What's faked:
-  • FakeBot     — captures outgoing chat instead of sending to Teams/Zoom
+    • FakeBot     — captures outgoing chat instead of sending to Teams/Zoom and explicitly disables speech/TTS
   • MockLLMService — returns instant canned responses (fast, free, deterministic)
 """
 
@@ -71,6 +71,10 @@ class FakeBot(BaseMeetingBot):
     def platform(self) -> MeetingPlatform:
         return MeetingPlatform.MICROSOFT_TEAMS
 
+    @property
+    def supports_speech_output(self) -> bool:
+        return False
+
     async def join(self, meeting_url: str) -> bool:
         return True
 
@@ -84,6 +88,9 @@ class FakeBot(BaseMeetingBot):
         })
         _print(f"  🤖 [FakeBot] {message}")
         return True
+
+    async def send_speech(self, text: str) -> bool:
+        raise AssertionError("E2E FakeBot must not synthesize or send speech")
 
     def get_page(self):
         return None
@@ -115,6 +122,25 @@ class MockLLMService:
             text=text,
             trigger=trigger,
             priority=MessagePriority.HIGH,
+        )
+
+    async def summarize_context(
+        self, existing_summary: str, chunks: List[TranscriptChunk]
+    ) -> Optional[str]:
+        if not chunks:
+            return existing_summary or None
+
+        latest_points = "; ".join(chunk.text.strip() for chunk in chunks[-3:] if chunk.text.strip())
+        if not latest_points:
+            return existing_summary or None
+
+        summary = latest_points[:240]
+        return (
+            f"Summary: {summary}\n"
+            "Decisions: None\n"
+            "Open Questions: None\n"
+            "Risks: None\n"
+            "Action Items: None"
         )
 
 

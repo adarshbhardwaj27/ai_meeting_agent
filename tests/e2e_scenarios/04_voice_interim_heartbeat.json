@@ -1,6 +1,6 @@
 {
   "meeting_id": "voice_interim_heartbeat",
-  "description": "Speaker stutters/pauses (interim chunks) between words — should NOT fire prematurely",
+  "description": "Speaker stutters or pauses between words — interim chunks must keep the 1.5s voice buffer alive until the final phrase arrives",
   "tags": ["voice-address", "heartbeat", "stutter"],
   "events": [
     {
@@ -8,8 +8,8 @@
       "text": "alex do you", "is_final": true, "delay_ms": 0
     },
     {
-      "type": "wait", "delay_ms": 2000,
-      "comment": "Speaker pauses to think — would trigger if no heartbeat"
+      "type": "wait", "delay_ms": 900,
+      "comment": "Speaker pauses to think — shortened below the 1.5s settle timer in current runtime"
     },
     {
       "type": "transcript", "speaker": "Adarsh Bhardwaj",
@@ -23,10 +23,10 @@
     },
     {
       "type": "transcript", "speaker": "Adarsh Bhardwaj",
-      "text": "currently speak?", "is_final": true, "delay_ms": 1500
+      "text": "currently speak?", "is_final": true, "delay_ms": 500
     },
     {
-      "type": "wait", "delay_ms": 1500
+      "type": "wait", "delay_ms": 1700
     },
     {
       "type": "assert",

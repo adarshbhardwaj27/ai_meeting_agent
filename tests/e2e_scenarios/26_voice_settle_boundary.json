@@ -1,6 +1,6 @@
 {
   "meeting_id": "voice_settle_at_boundary",
-  "description": "Chunk arrives at EXACTLY the settle boundary — tests the 3-second edge. Chunk at 2.8s should keep buffer alive.",
+  "description": "Chunk arrives just before the 1.5-second settle boundary — new content should keep the voice buffer alive until the final phrase is complete.",
   "tags": ["voice-address", "timing", "boundary"],
   "events": [
     {
@@ -9,14 +9,14 @@
       "is_final": true, "delay_ms": 0
     },
     {
-      "type": "wait", "delay_ms": 2800,
-      "comment": "Wait almost 3s — right at boundary"
+      "type": "wait", "delay_ms": 1300,
+      "comment": "Wait just under the 1.5s boundary"
     },
     {
       "type": "transcript", "speaker": "John",
       "text": "the architecture",
       "is_final": true, "delay_ms": 0,
-      "comment": "Arrives at 2.8s — should reset settle clock"
+      "comment": "Arrives before the settle timeout and should reset the voice buffer"
     },
     {
       "type": "assert",
@@ -24,13 +24,13 @@
       "trigger_type": "voice_address",
       "comment": "Should NOT have fired yet — just got new content"
     },
-    { "type": "wait", "delay_ms": 3500 },
+    { "type": "wait", "delay_ms": 1700 },
     {
       "type": "assert",
       "condition": "trigger_fired",
       "trigger_type": "voice_address",
       "text_contains": "architecture",
-      "comment": "Now fires 3s after the last chunk"
+      "comment": "Now fires after the last chunk settles"
     }
   ]
 }

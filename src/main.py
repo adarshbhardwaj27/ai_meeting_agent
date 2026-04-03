@@ -136,6 +136,7 @@ class MeetingAssistant:
                 meeting_id=f"meeting_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 platform=self.platform.value,
                 on_context_updated=self._on_context_updated,
+                context_summarizer=self.llm_service.summarize_context,
             )
 
             # 5. Trigger engine (decides when to speak)
@@ -495,7 +496,9 @@ async def run_simulation():
     llm_service = LLMService()
 
     context_engine = ContextEngine(
-        meeting_id="simulation_001", platform="simulation"
+        meeting_id="simulation_001",
+        platform="simulation",
+        context_summarizer=llm_service.summarize_context,
     )
     trigger_engine = TriggerEngine()
     mock_stt = MockSTTService(

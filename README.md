@@ -121,6 +121,7 @@ All configuration is in `.env`. Key settings:
 | Variable | Purpose | Required |
 |---|---|---|
 | `OPENAI_API_KEY` | LLM responses | Yes |
+| `CONTEXT_SUMMARY_MODEL` | Optional separate model for background context cleanup; defaults to `OPENAI_MODEL` | No |
 | `ELEVENLABS_API_KEY` | Spoken replies via ElevenLabs TTS | For voice replies |
 | `RECALL_API_KEY` | Teams/Zoom bot via Recall.ai | For Teams/Zoom |
 | `RECALL_REALTIME_URL` | WebSocket tunnel for live transcript | For real-time on Teams/Zoom |
@@ -132,12 +133,14 @@ All configuration is in `.env`. Key settings:
 | `ENABLE_PROACTIVE_MESSAGES` | Allow unsolicited observations | Default: true |
 | `MIN_SECONDS_BETWEEN_PROACTIVE` | Cooldown between proactive messages | Default: 30 |
 
+If you want a cheaper model for background memory compaction than for live replies, set `CONTEXT_SUMMARY_MODEL`. If you leave it unset, the assistant reuses `OPENAI_MODEL`.
+
 See `.env.example` for the full list.
 
 ## Testing
 
 ```bash
-# Run full test suite (109 tests)
+# Run full test suite (127 tests)
 python -m pytest
 
 # Run simulation mode (no API keys needed for trigger/context tests)

@@ -7,14 +7,13 @@
       "type": "transcript", "speaker": "Mike",
       "text": "alex mentioned the deadline is next friday",
       "is_final": true, "delay_ms": 0,
-      "comment": "Starts with 'alex' so START pattern matches — this IS a known limitation"
+      "comment": "Name appears at the start, but this is still a third-person statement, not a bot request"
     },
     { "type": "wait", "delay_ms": 4000 },
     {
       "type": "assert",
-      "condition": "trigger_fired",
-      "trigger_type": "voice_address",
-      "comment": "KNOWN LIMITATION: name at start always matches regardless of intent"
+      "condition": "no_trigger",
+      "comment": "Third-person statements should not be treated as voice-address triggers"
     }
   ]
 }
