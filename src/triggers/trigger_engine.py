@@ -22,6 +22,7 @@ from src.context.models import (
     SignalType, SignalCandidate,
 )
 from src.triggers.conversation_intelligence import ConversationIntelligence
+from src.triggers.fast_trigger_model import FastTriggerModel
 
 logger = structlog.get_logger()
 
@@ -73,6 +74,7 @@ class TriggerEngine:
         
         # Conversation intelligence (Tier-1 local scorer)
         self._intelligence = ConversationIntelligence()
+        self._fast_trigger_model = FastTriggerModel()
         
         # Bot name for command detection
         self.bot_name = config.bot.name.lower()
@@ -272,6 +274,15 @@ class TriggerEngine:
             signal_trigger = self._promote_signal(signal)
             if signal_trigger:
                 triggers.append(signal_trigger)
+
+        # 8. Fast local trigger model (safe fallback when rule layers found nothing)
+        if not triggers:
+            triggers.extend(
+                self._fast_trigger_model.predict_triggers(
+                    context=context,
+                    new_chunks=new_chunks,
+                )
+            )
 
         # Filter out triggers on cooldown
         triggers = self._filter_cooldowns(triggers)

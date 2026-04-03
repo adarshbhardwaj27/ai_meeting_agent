@@ -22,6 +22,7 @@ from src.context.models import (
 from src.context.context_engine import ContextEngine
 from src.triggers.trigger_engine import TriggerEngine
 from src.triggers.conversation_intelligence import ConversationIntelligence
+from src.triggers.fast_trigger_model import FastTriggerModel
 from src.reasoning.llm_service import LLMService
 from src.reasoning.speech_service import SpeechService
 from src.chat.chat_manager import ChatManager
@@ -1596,6 +1597,109 @@ class TestVoiceAddress:
         )
 
         assert any(t.type == TriggerType.REPEATED_CONFUSION for t in triggers)
+
+    @pytest.mark.asyncio
+    async def test_fast_model_detects_natural_multi_speaker_confusion(self):
+        """Natural multi-speaker debugging confusion should trigger without exact keyword dependence."""
+        trigger_engine = TriggerEngine()
+
+        context = MeetingContext(
+            meeting_id="natural_confusion_multispeaker",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        turns = [
+            TranscriptChunk(
+                text="Hey Abhishek, the API is returning 500 but logs are empty",
+                timestamp=datetime.now() - timedelta(seconds=7),
+                speaker="Adarsh Bhardwaj",
+            ),
+            TranscriptChunk(
+                text="That is weird, did you check if the middleware is swallowing the error?",
+                timestamp=datetime.now() - timedelta(seconds=6),
+                speaker="Abhishek Singh",
+            ),
+            TranscriptChunk(
+                text="Yeah I checked, nothing there, even console logs are not printing",
+                timestamp=datetime.now() - timedelta(seconds=5),
+                speaker="Adarsh Bhardwaj",
+            ),
+            TranscriptChunk(
+                text="Could it be failing before reaching the controller?",
+                timestamp=datetime.now() - timedelta(seconds=4),
+                speaker="Abhishek Singh",
+            ),
+            TranscriptChunk(
+                text="But then why no logs at all, even request logger is not showing anything",
+                timestamp=datetime.now() - timedelta(seconds=3),
+                speaker="Adarsh Bhardwaj",
+            ),
+            TranscriptChunk(
+                text="Hmm maybe it's a deployment issue or env config problem",
+                timestamp=datetime.now() - timedelta(seconds=2),
+                speaker="Abhishek Singh",
+            ),
+            TranscriptChunk(
+                text="I am honestly confused now, nothing is making sense",
+                timestamp=datetime.now() - timedelta(seconds=1),
+                speaker="Adarsh Bhardwaj",
+            ),
+            TranscriptChunk(
+                text="Same here, we are missing something basic I think",
+                timestamp=datetime.now(),
+                speaker="Abhishek Singh",
+            ),
+        ]
+
+        confusion = []
+        for turn in turns:
+            context.recent_transcript.append(turn)
+            triggers = await trigger_engine.check_for_triggers(
+                context=context,
+                new_chunks=[turn],
+            )
+            confusion.extend(t for t in triggers if t.type == TriggerType.REPEATED_CONFUSION)
+
+        assert confusion
+        assert confusion[0].confidence >= 0.62
+        assert "uncertainty" in confusion[0].reason.lower() or "confusion" in confusion[0].reason.lower()
+
+    def test_fast_model_avoids_normal_debug_discussion(self):
+        """Ordinary technical debugging should not look like repeated confusion."""
+        model = FastTriggerModel()
+        context = MeetingContext(
+            meeting_id="normal_debugging_discussion",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        context.recent_transcript.extend([
+            TranscriptChunk(
+                text="The API is returning 500 in staging but production is healthy",
+                timestamp=datetime.now() - timedelta(seconds=4),
+                speaker="Adarsh",
+            ),
+            TranscriptChunk(
+                text="Check the middleware order and compare the controller path mapping",
+                timestamp=datetime.now() - timedelta(seconds=3),
+                speaker="Abhishek",
+            ),
+            TranscriptChunk(
+                text="I will add a breakpoint and inspect the config values on the next request",
+                timestamp=datetime.now() - timedelta(seconds=2),
+                speaker="Adarsh",
+            ),
+            TranscriptChunk(
+                text="Good, then we can verify the logger initialization after that",
+                timestamp=datetime.now() - timedelta(seconds=1),
+                speaker="Abhishek",
+            ),
+        ])
+
+        triggers = model.predict_triggers(context=context)
+
+        assert [t for t in triggers if t.type == TriggerType.REPEATED_CONFUSION] == []
 
 
 # =============================================================================
