@@ -1,12 +1,9 @@
 # Real-Time AI Meeting Assistant - Dependencies
-# v2: Multi-platform (Google Meet + Teams + Zoom)
+# v2: Recall.ai platforms (Teams + Zoom)
 
 # LLM Integration
 openai>=1.12.0
 tiktoken>=0.5.0
-
-# Browser Automation (joins Google Meet via Playwright)
-playwright>=1.40.0
 
 # HTTP Client (Recall.ai API calls for Teams/Zoom)
 httpx>=0.27.0
@@ -35,5 +32,4 @@ pytest-asyncio>=0.23.0
 
 # ── Optional (only needed for simulation / advanced features) ──
 # anthropic>=0.18.0        # If using Claude instead of OpenAI
-# deepgram-sdk>=3.0.0      # Only if you want separate STT (not needed with captions)
-# pyaudio>=0.2.14          # Only if you want audio capture (not needed with captions)
+# pyaudio>=0.2.14          # Only if you add an audio-capture path later

@@ -24,7 +24,6 @@ class BotState(Enum):
 
 class MeetingPlatform(Enum):
     """Supported meeting platforms."""
-    GOOGLE_MEET = "google_meet"
     MICROSOFT_TEAMS = "teams"
     ZOOM = "zoom"
 
@@ -33,7 +32,7 @@ class BaseMeetingBot(ABC):
     """
     Abstract base class for meeting bots.
     
-    Each platform (Google Meet, Teams, Zoom) has its own implementation
+    Each platform (Teams, Zoom) has its own implementation
     that handles the specifics of joining meetings and sending chat messages.
     """
     

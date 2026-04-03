@@ -4,8 +4,8 @@ A real-time AI assistant that joins your meetings, listens to the conversation, 
 
 ## What It Does
 
-- Joins Google Meet, Microsoft Teams, or Zoom meetings as a bot participant
-- Listens to live transcript in real-time via captions (Meet) or Recall.ai (Teams/Zoom)
+- Joins Microsoft Teams or Zoom meetings as a bot participant
+- Listens to live transcript in real-time via Recall.ai
 - Detects when to contribute: contradictions, memory gaps, confusion, decisions forming, risks being overlooked
 - Responds to direct voice commands ("Alex, summarize that") or typed chat commands (`@Alex risks`)
 - Speaks replies aloud when addressed by name on Teams/Zoom; uses chat for everything else
@@ -22,6 +22,7 @@ pip install -r requirements.txt
 # 2. Configure
 copy .env.example .env
 # Fill in OPENAI_API_KEY (required)
+# Fill in ELEVENLABS_API_KEY (required for spoken replies)
 # Fill in RECALL_API_KEY (required for Teams/Zoom)
 
 # 3. Run simulation (no meeting needed)
@@ -29,8 +30,9 @@ python -m src.main --simulate
 
 # 4. Join a real meeting
 python -m src.main -m "https://teams.microsoft.com/l/meetup-join/..."
-python -m src.main -m "https://meet.google.com/xxx-yyyy-zzz"
+python -m src.main -m "https://zoom.us/j/123456789"
 ```
+<!-- python -m src.main -m "https://teams.live.com/meet/9390732530935?p=yXpaWHBxfx1xkgZfXQ" -->
 
 ### Teams/Zoom Real-Time Setup
 
@@ -63,7 +65,7 @@ Microphone → Platform STT → Transcript Chunks
                     ┌─────── Modality Policy ───────┐
                     ↓                               ↓
               Chat Manager                   Speech Service
-           (formatted text)              (OpenAI TTS → MP3)
+                          (formatted text)            (ElevenLabs TTS → MP3)
                     ↓                               ↓
               Bot.send_chat()              Bot.send_speech()
                     ↓                          (Recall.ai)
@@ -77,7 +79,7 @@ Microphone → Platform STT → Transcript Chunks
 | Trigger | How It Fires | Response |
 |---|---|---|
 | Explicit command | `@Alex summarize` in chat | Chat reply |
-| Voice address | "Alex, what did Sarah say?" spoken aloud | Speech reply (Teams/Zoom) or chat (Meet) |
+| Voice address | "Alex, what did Sarah say?" spoken aloud | Speech reply (Teams/Zoom) |
 | Contradiction | Two speakers state conflicting facts | Proactive chat |
 | Memory gap | Someone tries to recall something from earlier | Proactive chat |
 | Decision conflict | A decision contradicts a raised concern | Proactive chat |
@@ -94,14 +96,10 @@ src/
 ├── config.py                  # All configuration (env-driven)
 ├── bot/
 │   ├── base_bot.py            # Abstract bot interface (chat + speech)
-│   ├── google_meet_bot.py     # Playwright browser automation
 │   ├── recall_bot.py          # Recall.ai API (Teams/Zoom)
 │   └── teams_bot.py           # Teams-specific wrapper
-├── captions/
-│   └── caption_scraper.py     # Google Meet DOM caption extraction
 ├── transcription/
 │   ├── realtime_server.py     # WebSocket server for Recall transcript push
-│   ├── recall_webhook.py      # Webhook receiver for Recall events
 │   └── streaming_stt.py       # Mock STT for simulation mode
 ├── context/
 │   ├── models.py              # TranscriptChunk, MeetingContext, Trigger, etc.
@@ -111,7 +109,7 @@ src/
 │   └── conversation_intelligence.py  # Tier-1 local signal scoring
 ├── reasoning/
 │   ├── llm_service.py         # LLM response generation (OpenAI/Anthropic/Azure)
-│   └── speech_service.py      # OpenAI TTS for spoken replies
+│   └── speech_service.py      # ElevenLabs TTS for spoken replies
 └── chat/
     └── chat_manager.py        # Delivery routing (chat vs speech), rate limiting
 ```
@@ -122,12 +120,15 @@ All configuration is in `.env`. Key settings:
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `OPENAI_API_KEY` | LLM responses + TTS for spoken replies | Yes |
+| `OPENAI_API_KEY` | LLM responses | Yes |
+| `ELEVENLABS_API_KEY` | Spoken replies via ElevenLabs TTS | For voice replies |
 | `RECALL_API_KEY` | Teams/Zoom bot via Recall.ai | For Teams/Zoom |
 | `RECALL_REALTIME_URL` | WebSocket tunnel for live transcript | For real-time on Teams/Zoom |
 | `ENABLE_VOICE_REPLIES` | Enable spoken replies for voice-addressed questions | Default: true |
-| `OPENAI_TTS_MODEL` | TTS model (`tts-1` or `tts-1-hd`) | Default: tts-1 |
-| `OPENAI_TTS_VOICE` | Voice for spoken replies | Default: alloy |
+| `ELEVENLABS_MODEL_ID` | TTS model | Default: `eleven_flash_v2_5` |
+| `ELEVENLABS_VOICE_ID` | Voice ID for spoken replies | Default: ElevenLabs premade voice |
+| `ELEVENLABS_OUTPUT_FORMAT` | ElevenLabs audio format | Default: `mp3_22050_32` for lower speech latency |
+| `ELEVENLABS_LATENCY_MODE` | ElevenLabs latency optimization mode | Default: `3` |
 | `ENABLE_PROACTIVE_MESSAGES` | Allow unsolicited observations | Default: true |
 | `MIN_SECONDS_BETWEEN_PROACTIVE` | Cooldown between proactive messages | Default: 30 |
 

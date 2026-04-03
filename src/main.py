@@ -1,12 +1,10 @@
 """
 Main Orchestrator for the Real-Time AI Meeting Assistant.
 
-Architecture (v2 — Multi-platform):
-  Google Meet:  Playwright → Built-in Captions → CaptionScraper
-  Teams/Zoom:   Recall.ai API → Webhook → RecallWebhookServer
+Architecture (v2 — Recall.ai platforms):
+    Teams/Zoom:   Recall.ai API → WebSocket → RealtimeTranscriptServer
       → ContextEngine → TriggerEngine → LLM → ChatManager → Meeting Chat
 
-Google Meet uses browser automation + caption scraping (free, no API).
 Teams and Zoom use Recall.ai managed API (no browser, no Azure setup).
 The downstream pipeline is identical regardless of platform.
 """
@@ -27,7 +25,6 @@ from src.triggers import TriggerEngine
 from src.reasoning import LLMService
 from src.chat import ChatManager
 from src.bot import create_bot, detect_platform, BaseMeetingBot, BotState, MeetingPlatform
-from src.captions import CaptionScraper
 from src.transcription.realtime_server import RealtimeTranscriptServer
 from src.meeting_logger import MeetingLogger
 
@@ -57,11 +54,10 @@ logger = structlog.get_logger()
 
 class MeetingAssistant:
     """
-    Main orchestrator for the AI meeting assistant (v2 — multi-platform).
+        Main orchestrator for the AI meeting assistant (v2 — Teams/Zoom).
 
     Pipeline:
-      Google Meet: CaptionScraper ──transcript──> ContextEngine
-      Teams/Zoom:  RecallWebhook  ──transcript──> ContextEngine
+            Teams/Zoom:  RealtimeTranscriptServer ──transcript──> ContextEngine
                                                         |
       ContextEngine ──context──> TriggerEngine          |
                                        |                |
@@ -84,7 +80,6 @@ class MeetingAssistant:
 
         # Components (initialised in start())
         self.bot: Optional[BaseMeetingBot] = None
-        self.caption_scraper: Optional[CaptionScraper] = None
         self.realtime_server: Optional[RealtimeTranscriptServer] = None
         self.context_engine: Optional[ContextEngine] = None
         self.trigger_engine: Optional[TriggerEngine] = None
@@ -161,49 +156,28 @@ class MeetingAssistant:
                 self.meeting_logger.event("🔗", f"Joining meeting: {self.meeting_url}")
                 self.meeting_logger.event("📋", f"Platform: {self.platform.value}")
 
-                # ── Platform-specific: start transcript source ───────────
-                if self.platform == MeetingPlatform.GOOGLE_MEET:
-                    # Google Meet: use browser + caption scraping (free)
-                    self.caption_scraper = CaptionScraper(
-                        on_transcript=self._on_transcript_chunk,
-                        poll_interval_ms=300,
-                        meeting_url=self.meeting_url,
-                    )
+                # Teams / Zoom: use Recall.ai (managed API)
+                # Start real-time WebSocket server if tunnel URL is configured
+                if config.recall.realtime_url:
+                    try:
+                        self.realtime_server = RealtimeTranscriptServer(
+                            port=config.recall.realtime_ws_port,
+                            callback=self._on_transcript_chunk,
+                        )
+                        await self.realtime_server.start()
+                        print(f"🌐 Tunnel URL: {config.recall.realtime_url}")
+                    except Exception as e:
+                        logger.error("realtime_server_start_failed", error=str(e))
+                        print(f"⚠️  Real-time server failed: {e}")
+                        print("   Falling back to post-meeting transcript")
+                        self.realtime_server = None
 
-                    joined = await self.bot.join(self.meeting_url)
-                    if not joined:
-                        raise Exception("Failed to join meeting")
+                # Set polling fallback callback
+                self.bot.set_transcript_callback(self._on_transcript_chunk)
 
-                    page = self.bot.get_page()
-                    if page:
-                        await self.caption_scraper.start(page)
-                    else:
-                        print("⚠️  Could not get browser page for caption scraping")
-                        logger.error("no_page_for_captions")
-
-                else:
-                    # Teams / Zoom: use Recall.ai (managed API)
-                    # Start real-time WebSocket server if tunnel URL is configured
-                    if config.recall.realtime_url:
-                        try:
-                            self.realtime_server = RealtimeTranscriptServer(
-                                port=config.recall.realtime_ws_port,
-                                callback=self._on_transcript_chunk,
-                            )
-                            await self.realtime_server.start()
-                            print(f"🌐 Tunnel URL: {config.recall.realtime_url}")
-                        except Exception as e:
-                            logger.error("realtime_server_start_failed", error=str(e))
-                            print(f"⚠️  Real-time server failed: {e}")
-                            print("   Falling back to post-meeting transcript")
-                            self.realtime_server = None
-
-                    # Set polling fallback callback
-                    self.bot.set_transcript_callback(self._on_transcript_chunk)
-
-                    joined = await self.bot.join(self.meeting_url)
-                    if not joined:
-                        raise Exception("Failed to join meeting")
+                joined = await self.bot.join(self.meeting_url)
+                if not joined:
+                    raise Exception("Failed to join meeting")
 
             # ── Common services ──────────────────────────────────────
             await self.context_engine.start()
@@ -213,7 +187,7 @@ class MeetingAssistant:
             self._running = True
             self._main_loop_task = asyncio.create_task(self._main_loop())
 
-            source = "captions" if self.platform == MeetingPlatform.GOOGLE_MEET else "Recall.ai"
+            source = "Recall.ai"
             print(f"🚀 Meeting assistant is LIVE — listening via {source}")
             logger.info("assistant_started", transcript_source=source)
             self.meeting_logger.event("🚀", f"Meeting assistant is LIVE — listening via {source}")
@@ -235,9 +209,6 @@ class MeetingAssistant:
                 pass
 
         await self._cancel_background_tasks()
-
-        if self.caption_scraper:
-            await self.caption_scraper.stop()
 
         if self.realtime_server:
             await self.realtime_server.stop()
@@ -300,6 +271,7 @@ class MeetingAssistant:
 
     async def _process_trigger(self, trigger: Trigger, context: MeetingContext):
         """Generate an LLM response for a trigger and send it to chat."""
+        trigger_started_at = datetime.now()
         logger.info(
             "processing_trigger",
             type=trigger.type.value,
@@ -323,21 +295,31 @@ class MeetingAssistant:
         try:
             recent_text = context.get_recent_text(minutes=3)
 
+            generation_started_at = datetime.now()
             response = await self.llm_service.generate_response(
                 trigger=trigger,
                 context=context,
                 recent_transcript=recent_text,
             )
+            generation_elapsed = (datetime.now() - generation_started_at).total_seconds()
+            if self.meeting_logger:
+                self.meeting_logger.event("⏱️", f"Response generation: {generation_elapsed:.2f}s")
 
             if response:
+                delivery_started_at = datetime.now()
                 sent = await self.chat_manager.send(response)
+                delivery_elapsed = (datetime.now() - delivery_started_at).total_seconds()
                 if sent:
+                    total_elapsed = (datetime.now() - trigger_started_at).total_seconds()
                     print(f"🤖 Sent: {response.text[:80]}")
                     logger.info(
                         "response_sent",
                         trigger=trigger.type.value,
                         message=response.text[:50],
                     )
+                    if self.meeting_logger:
+                        self.meeting_logger.event("⏱️", f"Delivery: {delivery_elapsed:.2f}s")
+                        self.meeting_logger.event("⏱️", f"Trigger to sent: {total_elapsed:.2f}s")
                     # Observable hook — tests use this to record responses
                     if self.on_response_sent:
                         self.on_response_sent(response, trigger)
@@ -347,6 +329,8 @@ class MeetingAssistant:
                             text=response.text,
                             trigger_type=trigger.type.value,
                         )
+                elif self.meeting_logger:
+                    self.meeting_logger.event("⏱️", f"Delivery attempt: {delivery_elapsed:.2f}s (not sent)")
             else:
                 logger.debug("llm_skipped_response", trigger=trigger.type.value)
 
@@ -356,7 +340,7 @@ class MeetingAssistant:
     # ── Callbacks ────────────────────────────────────────────────────
 
     def _on_transcript_chunk(self, chunk: TranscriptChunk):
-        """Called by CaptionScraper when a new caption line appears."""
+        """Called when a new transcript chunk arrives from Recall.ai."""
         if not self.context_engine:
             return
 
@@ -444,6 +428,7 @@ class MeetingAssistant:
         )
         for trigger in triggers:
             if trigger.type == TriggerType.EXPLICIT_COMMAND:
+                trigger.speaker = sender
                 await self._process_trigger(trigger, context)
                 break
 
@@ -609,7 +594,7 @@ def main():
     parser.add_argument(
         "--meeting-url",
         "-m",
-        help="Meeting URL (Google Meet, Teams, or Zoom)",
+        help="Meeting URL (Teams or Zoom)",
     )
 
     parser.add_argument(
@@ -628,8 +613,8 @@ def main():
     else:
         parser.print_help()
         print("\n💡 Try: python -m src.main --simulate")
-        print("   Or:  python -m src.main -m https://meet.google.com/xxx-yyyy-zzz")
         print("   Or:  python -m src.main -m https://teams.microsoft.com/l/meetup-join/...")
+        print("   Or:  python -m src.main -m https://zoom.us/j/123456789")
 
 
 if __name__ == "__main__":

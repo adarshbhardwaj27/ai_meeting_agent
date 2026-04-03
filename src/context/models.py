@@ -142,7 +142,7 @@ class MeetingContext:
     # Meeting metadata
     meeting_id: str
     meeting_started_at: datetime
-    platform: str  # "google_meet", "teams", "zoom"
+    platform: str  # "teams", "zoom"
     
     # Raw transcript - sliding window (configurable, default ~10 min)
     recent_transcript: List[TranscriptChunk] = field(default_factory=list)
@@ -256,6 +256,7 @@ class Trigger:
     confidence: float  # 0.0 to 1.0
     timestamp: datetime
     reason: str  # Human-readable explanation
+    speaker: Optional[str] = None
     
     # For command triggers
     command_type: Optional[CommandType] = None

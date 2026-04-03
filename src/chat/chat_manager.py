@@ -9,6 +9,7 @@ Handles:
 """
 
 import asyncio
+import re
 from datetime import datetime, timedelta
 from typing import Optional, List
 from collections import deque
@@ -151,7 +152,24 @@ class ChatManager:
 
     def _format_speech(self, text: str) -> str:
         """Format text for spoken delivery without chat-specific labels."""
-        return text.strip()
+        normalized = " ".join((text or "").replace("|", ". ").split())
+        if not normalized:
+            return ""
+
+        sentences = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", normalized) if segment.strip()]
+        spoken_parts: List[str] = []
+        for sentence in sentences:
+            candidate = " ".join(spoken_parts + [sentence]).strip()
+            if len(candidate) <= 160 and len(spoken_parts) < 2:
+                spoken_parts.append(sentence)
+            else:
+                break
+
+        spoken_text = " ".join(spoken_parts).strip() or normalized
+        if len(spoken_text) > 160:
+            spoken_text = spoken_text[:157].rsplit(" ", 1)[0].rstrip(".,!? ") + "..."
+
+        return spoken_text
 
     def _should_send_as_speech(self, response: AIResponse) -> bool:
         """Direct voice-addressed replies may be spoken on supported bots."""

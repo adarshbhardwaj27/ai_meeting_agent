@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from typing import Optional
 
+import httpx
 import structlog
 
 from src.config import config
@@ -15,40 +16,38 @@ logger = structlog.get_logger()
 class SpeechService:
     """Generate MP3 audio for short spoken bot replies."""
 
+    _API_BASE_URL = "https://api.elevenlabs.io/v1"
+
     def __init__(self):
-        self._client = None
-        self._model = config.speech.openai_tts_model
-        self._voice = config.speech.openai_tts_voice
-        self._speed = config.speech.openai_tts_speed
+        self._api_key = config.speech.elevenlabs_api_key
+        self._model = config.speech.elevenlabs_model_id
+        self._voice_id = config.speech.elevenlabs_voice_id
+        self._output_format = config.speech.elevenlabs_output_format
+        self._latency_mode = config.speech.elevenlabs_latency_mode
         self._initialize_client()
 
     @property
     def available(self) -> bool:
-        return self._client is not None
+        return bool(config.speech.enable_voice_replies and self._api_key)
 
     def _initialize_client(self):
         if not config.speech.enable_voice_replies:
             return
 
-        if not config.llm.openai_api_key:
-            logger.info("speech_disabled_no_openai_key")
+        if not self._api_key:
+            logger.info("speech_disabled_no_elevenlabs_key")
             return
 
-        try:
-            from openai import AsyncOpenAI
-
-            self._client = AsyncOpenAI(api_key=config.llm.openai_api_key)
-            logger.info(
-                "speech_service_initialized",
-                model=self._model,
-                voice=self._voice,
-            )
-        except ImportError:
-            logger.warning("speech_openai_not_installed")
+        logger.info(
+            "speech_service_initialized",
+            provider="elevenlabs",
+            model=self._model,
+            voice_id=self._voice_id,
+        )
 
     async def synthesize_mp3(self, text: str) -> Optional[bytes]:
         """Convert response text into MP3 audio bytes."""
-        if not self._client:
+        if not self.available:
             return None
 
         spoken_text = (text or "").strip()
@@ -56,16 +55,37 @@ class SpeechService:
             return None
 
         try:
-            response = await self._client.audio.speech.create(
-                model=self._model,
-                voice=self._voice,
-                input=spoken_text,
-                response_format="mp3",
-                speed=self._speed,
+            params = {"output_format": self._output_format}
+            if self._latency_mode >= 0:
+                params["optimize_streaming_latency"] = self._latency_mode
+
+            payload = {
+                "text": spoken_text,
+                "model_id": self._model,
+            }
+            headers = {
+                "xi-api-key": self._api_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            }
+
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    f"{self._API_BASE_URL}/text-to-speech/{self._voice_id}",
+                    params=params,
+                    headers=headers,
+                    json=payload,
+                )
+
+            if response.status_code == 200:
+                return response.content
+
+            logger.error(
+                "speech_synthesis_failed",
+                status=response.status_code,
+                error=response.text,
             )
-            audio_bytes = await response.aread()
-            await response.aclose()
-            return audio_bytes
+            return None
         except Exception as e:
             logger.error("speech_synthesis_failed", error=str(e))
             return None

@@ -10,6 +10,7 @@ All outputs are constrained to be 1-3 lines, neutral, and easy to ignore.
 """
 
 import asyncio
+import re
 from typing import Optional, Dict, Any
 from datetime import datetime
 import structlog
@@ -133,10 +134,11 @@ This is a voice question — they are speaking to YOU, not typing in chat.
 
 RULES:
 - Respond as if someone at the table asked you a question
-- Be concise (2-3 lines max) but genuinely helpful
+- Keep it to 1-2 short spoken sentences, ideally under 160 characters
 - Use the full meeting context to give the best answer
 - Address the speaker by name if known
 - Be natural and conversational — this is a spoken interaction and your reply may be spoken aloud
+- Do not ask a follow-up question unless it is absolutely necessary
 - If they asked a known command (summarize, risks, etc.) follow that command's format""",
 }
 
@@ -235,21 +237,33 @@ class LLMService:
         Returns:
             AIResponse if a message should be sent, None if AI decides to skip
         """
-        # Build the prompt
-        system_prompt = self._build_system_prompt(trigger)
-        user_prompt = self._build_user_prompt(trigger, context, recent_transcript)
-        
-        # Call LLM
-        response_text = await self._call_llm(system_prompt, user_prompt)
-
-        if response_text is None:
-            response_text = self._build_local_fallback_response(
+        fast_response_text = self._build_fast_voice_response(
+            trigger=trigger,
+            context=context,
+            recent_transcript=recent_transcript,
+        )
+        if fast_response_text is not None:
+            response_text = fast_response_text
+        else:
+            # Build the prompt
+            system_prompt = self._build_system_prompt(trigger)
+            user_prompt = self._build_user_prompt(trigger, context, recent_transcript)
+            
+            # Call LLM
+            response_text = await self._call_llm(
+                system_prompt,
+                user_prompt,
                 trigger=trigger,
-                context=context,
-                recent_transcript=recent_transcript,
             )
+
             if response_text is None:
-                return None
+                response_text = self._build_local_fallback_response(
+                    trigger=trigger,
+                    context=context,
+                    recent_transcript=recent_transcript,
+                )
+                if response_text is None:
+                    return None
         
         # Check for SKIP response
         if response_text.strip().upper() == "SKIP" or not response_text.strip():
@@ -277,6 +291,54 @@ class LLMService:
         )
         
         return response
+
+    def _build_fast_voice_response(
+        self,
+        trigger: Trigger,
+        context: MeetingContext,
+        recent_transcript: str,
+    ) -> Optional[str]:
+        """Return low-latency local responses for common spoken interactions."""
+        if trigger.type != TriggerType.VOICE_ADDRESS:
+            return None
+
+        speaker_name = (trigger.speaker or "").strip()
+
+        if trigger.command_type in {
+            CommandType.SUMMARIZE,
+            CommandType.RISKS,
+            CommandType.DECISION,
+            CommandType.ACTION_ITEMS,
+        }:
+            logger.info(
+                "voice_fast_path_used",
+                command=(trigger.command_type.value if trigger.command_type else "custom"),
+            )
+            if trigger.command_type == CommandType.SUMMARIZE:
+                return self._fallback_spoken_summary(context, recent_transcript)
+            return self._build_local_fallback_response(
+                trigger=trigger,
+                context=context,
+                recent_transcript=recent_transcript,
+            )
+
+        request_text = (trigger.relevant_transcript or trigger.command_args or "").lower()
+        normalized_text = re.sub(r"[^a-z0-9\s?]", " ", request_text)
+        normalized_text = re.sub(r"\s+", " ", normalized_text).strip()
+
+        if speaker_name and normalized_text in {"what is my name", "what s my name", "who am i"}:
+            logger.info("voice_smalltalk_fast_path", kind="identity")
+            return f"Your name is {speaker_name}."
+
+        if "how are you" in normalized_text:
+            logger.info("voice_smalltalk_fast_path", kind="how_are_you")
+            return "I'm doing well. How can I help?"
+
+        if "are you there" in normalized_text or "can you hear me" in normalized_text:
+            logger.info("voice_smalltalk_fast_path", kind="presence_check")
+            return "Yes, I'm here and listening."
+
+        return None
     
     def _build_system_prompt(self, trigger: Trigger) -> str:
         """Build the system prompt for the trigger type."""
@@ -367,11 +429,18 @@ class LLMService:
         
         return "\n".join(parts)
     
-    async def _call_llm(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    async def _call_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        trigger: Optional[Trigger] = None,
+    ) -> Optional[str]:
         """Call the LLM and return the response text."""
         if self._client is None:
             logger.warning("llm_client_not_initialized")
             return None
+
+        max_tokens = 80 if trigger and trigger.type == TriggerType.VOICE_ADDRESS else 150
         
         try:
             if self.provider in (LLMProvider.OPENAI, LLMProvider.AZURE_OPENAI):
@@ -381,7 +450,7 @@ class LLMService:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    max_tokens=150,  # Keep responses short
+                    max_tokens=max_tokens,
                     temperature=0.7,
                 )
                 return response.choices[0].message.content
@@ -391,7 +460,7 @@ class LLMService:
                     model=self._model,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_prompt}],
-                    max_tokens=150,
+                    max_tokens=max_tokens,
                 )
                 return response.content[0].text
                 
@@ -439,9 +508,10 @@ class LLMService:
     def _fallback_summary(self, context: MeetingContext, recent_transcript: str) -> str:
         """Build a concise summary from local structured context."""
         parts = []
+        topic = self._select_summary_topic(context, recent_transcript)
 
-        if context.current_topic:
-            parts.append(f"Topic: {context.current_topic.name}")
+        if topic:
+            parts.append(f"Topic: {topic}")
 
         decisions = context.decisions_confirmed[-1:] + context.decisions_pending[:1]
         if decisions:
@@ -456,12 +526,223 @@ class LLMService:
             parts.append(f"Next: {context.action_items[0]}")
 
         if not parts and recent_transcript.strip():
-            snippet = recent_transcript.strip()
-            if len(snippet) > 180:
-                snippet = snippet[-180:]
-            parts.append(f"Recent discussion: {snippet}")
+            discussion_hint = self._infer_topic_from_text(recent_transcript)
+            if discussion_hint:
+                parts.append(f"Recent discussion: {discussion_hint}")
+            else:
+                snippet = recent_transcript.strip()
+                if len(snippet) > 180:
+                    snippet = snippet[-180:]
+                parts.append(f"Recent discussion: {snippet}")
 
         return "\n".join(parts[:3]) or "No strong meeting context captured yet."
+
+    def _fallback_spoken_summary(self, context: MeetingContext, recent_transcript: str) -> str:
+        """Build a short, spoken-friendly summary for voice requests."""
+        topic = self._select_summary_topic(context, recent_transcript)
+        concern = self._select_primary_concern(context, recent_transcript)
+        decision = self._select_primary_decision(context)
+        no_decision = self._infer_no_decision_clause(recent_transcript) if decision is None else None
+
+        sentences = []
+        if topic:
+            sentences.append(f"So far, the discussion is about {topic}.")
+
+        detail_clauses = []
+        if decision:
+            detail_clauses.append(f"a likely direction is {decision}")
+        elif no_decision:
+            detail_clauses.append(no_decision)
+
+        if concern:
+            detail_clauses.append(f"the main concern is {concern}")
+        elif not detail_clauses and context.action_items:
+            detail_clauses.append(f"the next step is {self._to_sentence_fragment(context.action_items[0])}")
+
+        if detail_clauses:
+            sentence = self._join_spoken_clauses(detail_clauses)
+            if sentence:
+                sentences.append(sentence)
+
+        if not sentences:
+            discussion_hint = self._infer_topic_from_text(recent_transcript)
+            if discussion_hint:
+                return f"So far, the discussion is about {discussion_hint}."
+            return "I do not have a clean summary yet."
+
+        return " ".join(sentences[:2])
+
+    def _select_summary_topic(self, context: MeetingContext, recent_transcript: str) -> Optional[str]:
+        """Pick the cleanest topic label available for summaries."""
+        if context.current_topic and context.current_topic.name:
+            cleaned_topic = self._clean_topic_candidate(context.current_topic.name)
+            if cleaned_topic:
+                return cleaned_topic
+
+        return self._infer_topic_from_text(recent_transcript)
+
+    def _clean_topic_candidate(self, topic: str) -> Optional[str]:
+        """Normalize a topic and reject noisy transcript-like labels."""
+        cleaned = " ".join((topic or "").split()).strip(" ,.!?;:")
+        if not cleaned:
+            return None
+
+        lowered = cleaned.lower()
+        if self._looks_like_noisy_topic(lowered):
+            return self._infer_topic_from_text(cleaned)
+
+        return lowered
+
+    def _looks_like_noisy_topic(self, text: str) -> bool:
+        """Heuristic for transcript fragments that should not be spoken as a topic."""
+        tokens = [re.sub(r"[^a-z0-9]+", "", token) for token in text.split()]
+        tokens = [token for token in tokens if token]
+        if not tokens:
+            return True
+
+        question_like = {"which", "what", "how", "who", "why", "should", "could"}
+        unique_ratio = len(set(tokens)) / len(tokens)
+        return (
+            len(tokens) > 8
+            or len(text) > 80
+            or sum(token in question_like for token in tokens) >= 2
+            or unique_ratio < 0.75
+            or self.bot_name.lower() in tokens
+        )
+
+    def _infer_topic_from_text(self, text: str) -> Optional[str]:
+        """Infer a concise topic phrase from noisy transcript text."""
+        normalized = self._normalize_summary_text(text)
+        if not normalized:
+            return None
+
+        if ("cloud" in normalized or "provider" in normalized) and any(
+            provider in normalized for provider in ("aws", "azure", "gcp", "google cloud")
+        ):
+            if any(word in normalized for word in ("budget", "constrain", "cost")):
+                return "cloud provider options under a tight budget"
+            return "the best cloud provider and architecture to use"
+
+        if "architecture" in normalized and "cloud" in normalized:
+            return "cloud architecture choices"
+
+        if any(word in normalized for word in ("budget", "cost", "pricing")):
+            return "budget constraints"
+
+        keywords = self._extract_summary_keywords(normalized)
+        if not keywords:
+            return None
+        if len(keywords) == 1:
+            return keywords[0]
+        if len(keywords) == 2:
+            return f"{keywords[0]} and {keywords[1]}"
+        return f"{keywords[0]}, {keywords[1]}, and {keywords[2]}"
+
+    def _normalize_summary_text(self, text: str) -> str:
+        """Normalize free-form transcript text for summary heuristics."""
+        normalized = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+        normalized = re.sub(r"\b(?:alex|so|um|uh|hmm|like|just|really|today|okay|ok)\b", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    def _extract_summary_keywords(self, text: str) -> list[str]:
+        """Extract a few meaningful keywords from transcript text."""
+        stopwords = {
+            "about", "after", "again", "also", "been", "being", "between", "build", "building",
+            "can", "could", "corporate", "discuss", "discussing", "from", "have", "help", "into",
+            "it", "its", "just", "make", "more", "only", "people", "question", "right", "should",
+            "something", "talk", "that", "them", "they", "this", "till", "use", "used", "using",
+            "want", "what", "which", "with", "would", "your", "you", "we", "will", "till", "now",
+        }
+        keywords = []
+        seen = set()
+        for token in text.split():
+            if len(token) < 4 or token in stopwords or token in seen:
+                continue
+            seen.add(token)
+            keywords.append(token)
+            if len(keywords) == 3:
+                break
+        return keywords
+
+    def _select_primary_concern(self, context: MeetingContext, recent_transcript: str) -> Optional[str]:
+        """Get the most important concern for a summary."""
+        if context.high_priority_concerns:
+            return self._to_sentence_fragment(context.high_priority_concerns[0].description)
+        if context.unaddressed_concerns:
+            return self._to_sentence_fragment(context.unaddressed_concerns[0].description)
+
+        normalized = self._normalize_summary_text(recent_transcript)
+        if any(word in normalized for word in ("budget", "constrain", "cost")):
+            return "budget constraints"
+        if any(word in normalized for word in ("latency", "risk", "issue", "problem")):
+            for keyword in ("latency", "risk", "issue", "problem"):
+                if keyword in normalized:
+                    return f"{keyword} concerns"
+        return None
+
+    def _select_primary_decision(self, context: MeetingContext) -> Optional[str]:
+        """Get the clearest decision phrase for a spoken summary."""
+        if context.decisions_confirmed:
+            return self._decision_phrase(context.decisions_confirmed[-1].description)
+        if context.decisions_pending:
+            return self._decision_phrase(context.decisions_pending[-1].description)
+        return None
+
+    def _decision_phrase(self, description: str) -> str:
+        """Convert a decision description into a sentence-friendly phrase."""
+        text = self._to_sentence_fragment(description)
+        lowered = text.lower()
+
+        for prefix in ("we should ", "we will ", "we'll ", "let's ", "going with ", "go with "):
+            if lowered.startswith(prefix):
+                return f"to {lowered[len(prefix):].strip()}"
+
+        first_word = lowered.split()[0] if lowered.split() else ""
+        if first_word in {"use", "choose", "adopt", "implement", "build", "move"}:
+            return f"to {lowered}"
+
+        return lowered
+
+    def _infer_no_decision_clause(self, recent_transcript: str) -> Optional[str]:
+        """Infer when the discussion is still open and comparing options."""
+        normalized = self._normalize_summary_text(recent_transcript)
+        providers = []
+        for label, pattern in (
+            ("AWS", r"\baws\b"),
+            ("Azure", r"\bazure\b"),
+            ("GCP", r"\bgcp\b|\bgoogle cloud\b"),
+        ):
+            if re.search(pattern, normalized):
+                providers.append(label)
+
+        if len(providers) >= 2:
+            if len(providers) == 2:
+                return f"no final choice is locked yet between {providers[0]} and {providers[1]}"
+            return f"no final choice is locked yet between {providers[0]}, {providers[1]}, and {providers[2]}"
+
+        if any(phrase in normalized for phrase in ("which one", "what do you think", "confused about", "should use", "should we use")):
+            return "no final decision is locked yet"
+
+        return None
+
+    def _to_sentence_fragment(self, text: str) -> str:
+        """Normalize text fragments before inserting them into spoken sentences."""
+        cleaned = " ".join((text or "").split()).strip(" ,.!?;:")
+        if not cleaned:
+            return ""
+        return cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+
+    def _join_spoken_clauses(self, clauses: list[str]) -> Optional[str]:
+        """Join 1-2 spoken clauses into a short sentence."""
+        filtered = [clause.strip().rstrip(". ") for clause in clauses if clause.strip()]
+        if not filtered:
+            return None
+        if len(filtered) == 1:
+            sentence = filtered[0]
+        else:
+            sentence = f"{filtered[0]}, and {filtered[1]}"
+        return sentence[0].upper() + sentence[1:] + "."
 
     def _fallback_risks(self, context: MeetingContext) -> str:
         concerns = context.high_priority_concerns or context.unaddressed_concerns

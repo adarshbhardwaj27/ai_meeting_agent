@@ -1,12 +1,11 @@
 """
 Recall.ai Bot — Platform-agnostic meeting bot via Recall.ai API.
 
-Recall.ai provides a managed service that sends a bot into any meeting
-(Teams, Google Meet, Zoom, Webex) and streams real-time transcription
+Recall.ai provides a managed service that sends a bot into supported meetings
+(Teams, Zoom, Webex) and streams real-time transcription
 back via webhooks. One REST API call = bot joins + audio + STT + chat.
 
-This replaces platform-specific browser automation (Playwright) for
-platforms like Teams where browser-based approaches don't work well.
+This provides the managed meeting-bot path used by the current runtime.
 
 Docs: https://docs.recall.ai
 """
@@ -43,8 +42,8 @@ class RecallBot(BaseMeetingBot):
     - Speaker diarization
     - Recording (optional)
 
-    The real-time transcript arrives via webhook to our local server
-    (see src/transcription/recall_webhook.py).
+    The real-time transcript arrives via websocket to our local
+    RealtimeTranscriptServer.
     """
 
     def __init__(

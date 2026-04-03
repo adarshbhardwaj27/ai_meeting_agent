@@ -127,14 +127,20 @@ class SpeechConfig:
     enable_voice_replies: bool = field(
         default_factory=lambda: os.getenv("ENABLE_VOICE_REPLIES", "true").lower() == "true"
     )
-    openai_tts_model: str = field(
-        default_factory=lambda: os.getenv("OPENAI_TTS_MODEL", "tts-1")
+    elevenlabs_api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("ELEVENLABS_API_KEY")
     )
-    openai_tts_voice: str = field(
-        default_factory=lambda: os.getenv("OPENAI_TTS_VOICE", "alloy")
+    elevenlabs_model_id: str = field(
+        default_factory=lambda: os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
     )
-    openai_tts_speed: float = field(
-        default_factory=lambda: float(os.getenv("OPENAI_TTS_SPEED", "1.0"))
+    elevenlabs_voice_id: str = field(
+        default_factory=lambda: os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
+    )
+    elevenlabs_output_format: str = field(
+        default_factory=lambda: os.getenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_22050_32")
+    )
+    elevenlabs_latency_mode: int = field(
+        default_factory=lambda: int(os.getenv("ELEVENLABS_LATENCY_MODE", "3"))
     )
 
 
@@ -147,17 +153,6 @@ class RecallConfig:
     api_base_url: Optional[str] = field(
         default_factory=lambda: os.getenv(
             "RECALL_API_BASE_URL", "https://us-west-2.recall.ai/api/v1"
-        )
-    )
-    webhook_port: int = field(
-        default_factory=lambda: int(os.getenv("RECALL_WEBHOOK_PORT", "8765"))
-    )
-    webhook_url: Optional[str] = field(
-        default_factory=lambda: os.getenv("RECALL_WEBHOOK_URL")
-    )
-    transcription_provider: str = field(
-        default_factory=lambda: os.getenv(
-            "RECALL_TRANSCRIPTION_PROVIDER", "meeting_captions"
         )
     )
     # Real-time transcript via WebSocket (requires a tunnel)

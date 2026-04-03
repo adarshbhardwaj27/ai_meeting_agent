@@ -22,6 +22,7 @@ from src.context.context_engine import ContextEngine
 from src.triggers.trigger_engine import TriggerEngine
 from src.triggers.conversation_intelligence import ConversationIntelligence
 from src.reasoning.llm_service import LLMService
+from src.reasoning.speech_service import SpeechService
 from src.chat.chat_manager import ChatManager
 
 
@@ -1040,6 +1041,36 @@ class TestVoiceAddress:
         assert len(voice_triggers) == 0
 
     @pytest.mark.asyncio
+    async def test_voice_start_third_person_reference_does_not_trigger(self, trigger_engine, base_context):
+        """'alex mentioned the deadline...' should not be treated as a direct address."""
+        chunk = TranscriptChunk(
+            text="alex mentioned the deadline is next friday",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        assert [t for t in triggers if t.type == TriggerType.VOICE_ADDRESS] == []
+
+    @pytest.mark.asyncio
+    async def test_voice_name_from_reference_does_not_trigger(self, trigger_engine, base_context):
+        """'yeah alex from the product team ...' should not be treated as a direct address."""
+        chunk = TranscriptChunk(
+            text="yeah alex from the product team said he will handle the integration",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+
+        assert [t for t in triggers if t.type == TriggerType.VOICE_ADDRESS] == []
+
+    @pytest.mark.asyncio
     async def test_voice_takes_priority_over_proactive(self, trigger_engine, base_context):
         """Voice-addressed question should return immediately, skipping proactive checks."""
         # Add context that would normally trigger proactive signals
@@ -1116,6 +1147,31 @@ class TestVoiceAddress:
         assert "what do you think" in triggers[0].relevant_transcript
 
     @pytest.mark.asyncio
+    async def test_voice_name_at_end_command_after_settle(self, trigger_engine, base_context):
+        """'summarize alex' should trigger after settle and classify as summarize."""
+        chunk = TranscriptChunk(
+            text="summarize alex",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 0
+
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.SUMMARIZE
+        assert triggers[0].relevant_transcript.lower() == "summarize"
+
+    @pytest.mark.asyncio
     async def test_voice_name_in_middle_question(self, trigger_engine, base_context):
         """'can alex help with the migration?' — name in MIDDLE fires."""
         chunk = TranscriptChunk(
@@ -1129,6 +1185,81 @@ class TestVoiceAddress:
         assert len(triggers) == 1
         assert triggers[0].type == TriggerType.VOICE_ADDRESS
         assert "migration" in triggers[0].relevant_transcript
+
+    @pytest.mark.asyncio
+    async def test_voice_name_repeated_in_request_keeps_command(self, trigger_engine, base_context):
+        """'alex can you alex summarize' should still resolve to summarize."""
+        chunk = TranscriptChunk(
+            text="alex can you alex summarize",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 0
+
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.SUMMARIZE
+        assert "summarize" in triggers[0].relevant_transcript.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_name_with_filler_then_command_after_settle(self, trigger_engine, base_context):
+        """'so alex summarize' should trigger after settle and classify as summarize."""
+        chunk = TranscriptChunk(
+            text="so alex summarize",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 0
+
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.SUMMARIZE
+        assert triggers[0].relevant_transcript.lower() == "summarize"
+
+    @pytest.mark.asyncio
+    async def test_voice_clause_reset_then_name_triggers_followup(self, trigger_engine, base_context):
+        """A clause reset like 'oh wait alex how are you' should trigger the follow-up request."""
+        chunk = TranscriptChunk(
+            text="so harsh can you circle back to me tomorrow oh wait alex how are you",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[chunk]
+        )
+        assert len(triggers) == 0
+
+        trigger_engine._voice_buffer_last_chunk = datetime.now() - timedelta(seconds=2)
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context, new_chunks=[]
+        )
+
+        assert len(triggers) == 1
+        assert triggers[0].type == TriggerType.VOICE_ADDRESS
+        assert triggers[0].command_type == CommandType.CUSTOM
+        assert triggers[0].relevant_transcript.lower() == "how are you"
 
     @pytest.mark.asyncio
     async def test_voice_embedded_asking_statement_triggers(self, trigger_engine, base_context):
@@ -1298,6 +1429,90 @@ class TestVoiceAddress:
         assert any(t.type == TriggerType.CONFLICT_DETECTED for t in triggers)
 
     @pytest.mark.asyncio
+    async def test_voice_buffer_suppresses_proactive_decision_trigger(self, trigger_engine, base_context):
+        """While collecting a voice-addressed request, proactive triggers should be suppressed."""
+        chunk = TranscriptChunk(
+            text="alex we should use azure",
+            timestamp=datetime.now(),
+            speaker="Adarsh Bhardwaj",
+        )
+        base_context.recent_transcript.append(chunk)
+
+        triggers = await trigger_engine.check_for_triggers(
+            context=base_context,
+            new_chunks=[chunk],
+        )
+
+        assert triggers == []
+
+    @pytest.mark.asyncio
+    async def test_proactive_trigger_not_repeated_without_new_final_chunks(self):
+        """Periodic empty polls should not re-fire proactive triggers from stale transcript."""
+        trigger_engine = TriggerEngine()
+        context = MeetingContext(
+            meeting_id="decision_polling",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        chunk = TranscriptChunk(
+            text="we should use PostgreSQL for the main database",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+        context.recent_transcript.append(chunk)
+
+        first_triggers = await trigger_engine.check_for_triggers(
+            context=context,
+            new_chunks=[chunk],
+        )
+        assert any(t.type == TriggerType.DECISION_FORMING for t in first_triggers)
+
+        trigger_engine._last_trigger_by_type[TriggerType.DECISION_FORMING] = datetime.now() - timedelta(seconds=31)
+
+        second_triggers = await trigger_engine.check_for_triggers(
+            context=context,
+            new_chunks=[],
+        )
+        assert second_triggers == []
+
+    @pytest.mark.asyncio
+    async def test_duplicate_proactive_trigger_suppressed_on_same_text(self):
+        """Identical decision text should not keep re-triggering after cooldown expires."""
+        trigger_engine = TriggerEngine()
+        context = MeetingContext(
+            meeting_id="decision_duplicate",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        chunk1 = TranscriptChunk(
+            text="we should use PostgreSQL for the main database",
+            timestamp=datetime.now(),
+            speaker="Mike",
+        )
+        context.recent_transcript.append(chunk1)
+        first_triggers = await trigger_engine.check_for_triggers(
+            context=context,
+            new_chunks=[chunk1],
+        )
+        assert any(t.type == TriggerType.DECISION_FORMING for t in first_triggers)
+
+        trigger_engine._last_trigger_by_type[TriggerType.DECISION_FORMING] = datetime.now() - timedelta(seconds=31)
+
+        chunk2 = TranscriptChunk(
+            text="we should use PostgreSQL for the main database",
+            timestamp=datetime.now() + timedelta(seconds=1),
+            speaker="Mike",
+        )
+        context.recent_transcript.append(chunk2)
+        second_triggers = await trigger_engine.check_for_triggers(
+            context=context,
+            new_chunks=[chunk2],
+        )
+        assert [t for t in second_triggers if t.type == TriggerType.DECISION_FORMING] == []
+
+    @pytest.mark.asyncio
     async def test_repeated_confusion_detected_across_recent_turns(self):
         """Softer confusion across nearby turns should trigger repeated confusion."""
         trigger_engine = TriggerEngine()
@@ -1454,6 +1669,36 @@ class TestChatManager:
         bot.send_chat.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_voice_address_shortens_spoken_payload(self):
+        """Spoken delivery should trim long answers to keep TTS payloads small."""
+        bot = Mock()
+        bot.supports_speech_output = True
+        bot.send_speech = AsyncMock(return_value=True)
+        bot.send_chat = AsyncMock(return_value=True)
+
+        manager = ChatManager(bot)
+
+        voice_trigger = Trigger.create_command(CommandType.CUSTOM, "help with this")
+        voice_trigger.type = TriggerType.VOICE_ADDRESS
+        voice_response = AIResponse.create(
+            text=(
+                "Here is the quick answer. "
+                "The main risk is timeline slippage because integration and QA are both under-resourced this week. "
+                "I can summarize action items if useful."
+            ),
+            trigger=voice_trigger,
+            priority=MessagePriority.HIGH,
+        )
+
+        sent = await manager.send(voice_response)
+
+        assert sent is True
+        spoken_text = bot.send_speech.await_args.args[0]
+        assert len(spoken_text) <= 160
+        assert "I can summarize action items if useful." not in spoken_text
+        bot.send_chat.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_voice_address_falls_back_to_chat_when_speech_fails(self):
         """Speech delivery failures should fall back to the existing chat path."""
         bot = Mock()
@@ -1574,6 +1819,183 @@ class TestLLMServiceFallback:
         )
 
         assert response is None
+
+    @pytest.mark.asyncio
+    async def test_voice_summary_uses_fast_path_without_llm(self, fallback_context):
+        """Voice summarize requests should skip the LLM for lower latency."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(side_effect=AssertionError("LLM should not be called"))
+
+        trigger = Trigger.create_command(CommandType.SUMMARIZE)
+        trigger.type = TriggerType.VOICE_ADDRESS
+        trigger.relevant_transcript = "summarize"
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert "discussion is about" in response.text.lower() or "likely direction" in response.text.lower()
+        assert "topic:" not in response.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_summary_avoids_noisy_transcript_dump(self, fallback_context):
+        """Voice summaries should normalize noisy topic fragments instead of parroting them back."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(side_effect=AssertionError("LLM should not be called"))
+
+        fallback_context.current_topic = Topic(
+            name=(
+                "Which cloud architecture which cloud provider we should use "
+                "which provider aws azure which one we should use or gcp even"
+            ),
+            started_at=datetime.now() - timedelta(minutes=4),
+        )
+        fallback_context.concerns_raised.clear()
+        fallback_context.decisions_pending.clear()
+        fallback_context.recent_transcript = [
+            TranscriptChunk(
+                text="I was confused about which cloud provider we should use.",
+                timestamp=datetime.now() - timedelta(seconds=45),
+                speaker="Adarsh Bhardwaj",
+            ),
+            TranscriptChunk(
+                text="AWS, Azure, and GCP are all options and our budget is constrained.",
+                timestamp=datetime.now() - timedelta(seconds=15),
+                speaker="Adarsh Bhardwaj",
+            ),
+        ]
+
+        trigger = Trigger.create_command(CommandType.SUMMARIZE)
+        trigger.type = TriggerType.VOICE_ADDRESS
+        trigger.relevant_transcript = "can you summarize till now"
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert "which cloud architecture which cloud provider" not in response.text.lower()
+        assert "cloud provider" in response.text.lower()
+        assert "budget" in response.text.lower() or "no final choice" in response.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_smalltalk_uses_fast_path_without_llm(self, fallback_context):
+        """Common voice small-talk should respond locally without waiting for the LLM."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(side_effect=AssertionError("LLM should not be called"))
+
+        trigger = Trigger.create_command(CommandType.CUSTOM, "how are you")
+        trigger.type = TriggerType.VOICE_ADDRESS
+        trigger.relevant_transcript = "how are you"
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert "doing well" in response.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_identity_question_uses_speaker_name_fast_path(self, fallback_context):
+        """Speaker-grounded identity questions should answer with the speaker name."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(side_effect=AssertionError("LLM should not be called"))
+
+        trigger = Trigger.create_command(CommandType.EXPLAIN, "my name")
+        trigger.type = TriggerType.VOICE_ADDRESS
+        trigger.speaker = "Adarsh Bhardwaj"
+        trigger.relevant_transcript = "what is my name"
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert response.text == "Your name is Adarsh Bhardwaj."
+
+
+class TestSpeechService:
+    """Speech synthesis provider behavior."""
+
+    def test_speech_service_unavailable_without_elevenlabs_key(self, monkeypatch):
+        import src.reasoning.speech_service as speech_module
+
+        monkeypatch.setattr(speech_module.config.speech, "enable_voice_replies", True)
+        monkeypatch.setattr(speech_module.config.speech, "elevenlabs_api_key", None)
+
+        service = SpeechService()
+
+        assert service.available is False
+
+    @pytest.mark.asyncio
+    async def test_speech_service_calls_elevenlabs_convert_api(self, monkeypatch):
+        import src.reasoning.speech_service as speech_module
+
+        calls = []
+
+        class DummyResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.content = b"fake-mp3"
+                self.text = "ok"
+
+        class DummyAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def post(self, url, params=None, headers=None, json=None):
+                calls.append(
+                    {
+                        "url": url,
+                        "params": params,
+                        "headers": headers,
+                        "json": json,
+                    }
+                )
+                return DummyResponse()
+
+        monkeypatch.setattr(speech_module.config.speech, "enable_voice_replies", True)
+        monkeypatch.setattr(speech_module.config.speech, "elevenlabs_api_key", "test-key")
+        monkeypatch.setattr(speech_module.config.speech, "elevenlabs_model_id", "eleven_flash_v2_5")
+        monkeypatch.setattr(speech_module.config.speech, "elevenlabs_voice_id", "voice-123")
+        monkeypatch.setattr(speech_module.config.speech, "elevenlabs_output_format", "mp3_44100_128")
+        monkeypatch.setattr(speech_module.config.speech, "elevenlabs_latency_mode", 3)
+        monkeypatch.setattr(speech_module.httpx, "AsyncClient", DummyAsyncClient)
+
+        service = SpeechService()
+        audio = await service.synthesize_mp3("hello world")
+
+        assert audio == b"fake-mp3"
+        assert len(calls) == 1
+        assert calls[0]["url"].endswith("/text-to-speech/voice-123")
+        assert calls[0]["params"] == {
+            "output_format": "mp3_44100_128",
+            "optimize_streaming_latency": 3,
+        }
+        assert calls[0]["headers"]["xi-api-key"] == "test-key"
+        assert calls[0]["json"] == {
+            "text": "hello world",
+            "model_id": "eleven_flash_v2_5",
+        }
 
 
 # =============================================================================

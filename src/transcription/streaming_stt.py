@@ -5,8 +5,7 @@ This module provides a MockSTTService that injects text as if it
 were transcribed from speech. Used by the --simulate mode.
 
 The real transcription sources are:
-  - Google Meet: CaptionScraper (reads built-in captions from DOM)
-  - Teams/Zoom: RecallWebhookServer (receives Recall.ai webhook events)
+    - Teams/Zoom: RealtimeTranscriptServer (receives Recall.ai websocket events)
 """
 
 import asyncio

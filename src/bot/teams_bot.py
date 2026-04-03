@@ -6,7 +6,6 @@ Recall.ai handles joining the Teams meeting, audio capture, STT,
 and chat message delivery. This class is a thin Teams-specific
 wrapper around RecallBot.
 
-For Google Meet, the system uses Playwright (browser automation).
 For Teams (and Zoom), the system uses Recall.ai (managed API).
 """
 
@@ -25,8 +24,8 @@ class TeamsBot(RecallBot):
     """
     Bot for joining Microsoft Teams meetings via Recall.ai.
 
-    Teams runs on a desktop app, not a browser — so Playwright-based
-    approaches don't apply. Instead, we use Recall.ai's managed API
+    Teams runs on a desktop app, so local browser automation is not the
+    right integration path. Instead, we use Recall.ai's managed API
     which handles the entire meeting join + audio + transcription flow.
 
     This class inherits everything from RecallBot and just sets the

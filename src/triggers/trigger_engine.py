@@ -53,6 +53,7 @@ class TriggerEngine:
         
         # Trigger cooldowns (prevent spamming)
         self._last_trigger_by_type: dict[TriggerType, datetime] = {}
+        self._recent_trigger_signatures: dict[tuple[TriggerType, str], datetime] = {}
         self._cooldown_seconds = {
             TriggerType.EXPLICIT_COMMAND: 0,  # No cooldown for commands
             TriggerType.VOICE_ADDRESS: 0,     # No cooldown for voice-addressed questions
@@ -219,8 +220,18 @@ class TriggerEngine:
             triggers.append(voice_trigger)
             return triggers  # Voice-addressed questions take priority
 
+        if self._voice_buffer_started:
+            return triggers
+
         # Skip proactive triggers if disabled
         if not self.enable_proactive:
+            return triggers
+
+        has_new_final_chunks = bool(
+            new_chunks
+            and any(chunk.is_final and chunk.text.strip() for chunk in new_chunks)
+        )
+        if not has_new_final_chunks:
             return triggers
         
         # Get recent transcript text for pattern matching
@@ -338,6 +349,23 @@ class TriggerEngine:
         re.IGNORECASE,
     )
 
+    _CLAUSE_RESET_CUE = re.compile(
+        r"(?:^|\b)(?:"
+        r"(?:oh\s+wait)"
+        r"|wait"
+        r"|sorry"
+        r"|actually"
+        r"|anyway"
+        r"|ok"
+        r"|okay"
+        r"|well"
+        r"|um"
+        r"|uh"
+        r"|hold\s+on"
+        r")\s*$",
+        re.IGNORECASE,
+    )
+
     def _build_voice_mention_patterns(self) -> List[re.Pattern]:
         """Build pattern to detect the bot's name at the START of speech.
 
@@ -392,7 +420,12 @@ class TriggerEngine:
         for pattern in self._voice_mention_patterns:
             m = pattern.search(text_stripped)
             if m:
-                return (m.group(1) or "").strip()
+                after_name_text = self._normalize_voice_payload_start((m.group(1) or "").strip())
+                if not after_name_text:
+                    return ""
+                if self._is_obvious_reference_after_name(after_name_text):
+                    return None
+                return after_name_text
 
         # ── 2. Name elsewhere — require question heuristic ──────────
         name_re = re.compile(
@@ -408,6 +441,10 @@ class TriggerEngine:
         directed_payload = self._extract_direct_address_payload(before, after)
         if directed_payload:
             return directed_payload
+
+        clause_reset_payload = self._extract_clause_reset_payload(before, after)
+        if clause_reset_payload:
+            return clause_reset_payload
 
         # Must look like a question / command to avoid 3rd-person refs
         if not self._looks_like_question(text_stripped):
@@ -450,6 +487,58 @@ class TriggerEngine:
 
         return None
 
+    def _normalize_voice_payload_start(self, text: str) -> str:
+        """Strip filler words and repeated bot-name prefixes from payload starts."""
+        normalized = text.strip().lstrip(',: ')
+        filler_re = re.compile(
+            r"^(?:(?:hey|hi|yo|ok|so|and|but|yeah|yea|like|well|um|uh|oh|right|okay|now)\s+)+",
+            re.IGNORECASE,
+        )
+        name_re = re.compile(rf"^{re.escape(self.bot_name)}[,:\s]+", re.IGNORECASE)
+
+        while normalized:
+            previous = normalized
+            normalized = filler_re.sub("", normalized).lstrip(',: ')
+            normalized = name_re.sub("", normalized).lstrip(',: ')
+            if normalized == previous:
+                break
+
+        return normalized.strip()
+
+    @staticmethod
+    def _is_obvious_reference_after_name(text: str) -> bool:
+        """Reject strong third-person references such as 'Alex mentioned ...'."""
+        if not text:
+            return False
+
+        first_word = text.split()[0].lower().rstrip('.,!?')
+        return first_word in {
+            'mentioned', 'from', 'said', 'says', 'told', 'tells',
+            'works', 'worked', 'emailed', 'shared', 'sent',
+        }
+
+    def _extract_clause_reset_payload(
+        self,
+        before_name_text: str,
+        after_name_text: str,
+    ) -> Optional[str]:
+        """Extract a request after a clause reset like 'oh wait Alex ...'."""
+        if not before_name_text or not after_name_text:
+            return None
+
+        normalized_after = after_name_text.strip().lstrip(',: ')
+        if not normalized_after or not self._looks_like_question(normalized_after):
+            return None
+
+        before_tail = " ".join(before_name_text.strip().split()[-3:])
+        if not before_tail:
+            return None
+
+        if self._CLAUSE_RESET_CUE.search(before_tail):
+            return normalized_after
+
+        return None
+
     @staticmethod
     def _looks_like_question(text: str) -> bool:
         """Return True if *text* looks like a question or command.
@@ -463,9 +552,29 @@ class TriggerEngine:
         # Ends with a question mark → definitely a question
         if text[-1] == '?':
             return True
-        # First word is a question / command word
-        first_word = text.split()[0].lower().rstrip('.,!?')
-        return first_word in TriggerEngine._QUESTION_STARTERS
+
+        tokens = [part.lower().rstrip('.,!?') for part in text.split() if part.strip()]
+        if not tokens:
+            return False
+
+        first_word = tokens[0]
+        if first_word in {
+            'what', 'how', 'why', 'when', 'where', 'who', 'which',
+            'summarize', 'explain', 'help', 'tell', 'show', 'list',
+            'find', 'check', 'give', 'describe', 'compare', 'analyze',
+            'please',
+        }:
+            return True
+
+        if first_word not in TriggerEngine._QUESTION_STARTERS or len(tokens) < 2:
+            return False
+
+        second_word = tokens[1]
+        return second_word in {
+            'i', 'we', 'you', 'he', 'she', 'they', 'it', 'this', 'that',
+            'these', 'those', 'there', 'anyone', 'someone', 'somebody',
+            'my', 'our', 'the', 'alex',
+        }
 
     def _check_for_voice_mention(
         self,
@@ -480,7 +589,7 @@ class TriggerEngine:
         Buffer all subsequent speech (final + interim chunks keep the
         buffer alive).  Fire when:
           a) Punctuation at end (STT endpointed the sentence), OR
-          b) 3 seconds of true silence (no chunks at all).
+                    b) 1.5 seconds of true silence (no chunks at all).
         Discard if 15 s pass with no meaningful content.
         """
         now = datetime.now()
@@ -636,6 +745,7 @@ class TriggerEngine:
                             args = m.group(1).strip().rstrip("?.!")
                     trigger = Trigger.create_command(cmd_type, args)
                     trigger.type = TriggerType.VOICE_ADDRESS
+                    trigger.speaker = speaker
                     trigger.reason = f"{speaker or 'Someone'} asked by voice: {cmd_type.value}"
                     trigger.relevant_transcript = question_text
                     logger.info(
@@ -648,6 +758,7 @@ class TriggerEngine:
         # No known command matched — treat as a free-form question
         trigger = Trigger.create_command(CommandType.CUSTOM, question_text)
         trigger.type = TriggerType.VOICE_ADDRESS
+        trigger.speaker = speaker
         trigger.reason = f"{speaker or 'Someone'} asked by voice: \"{question_text}\""
         trigger.relevant_transcript = question_text
         logger.info("voice_question_detected", speaker=speaker, text=question_text[:80])
@@ -1074,13 +1185,28 @@ class TriggerEngine:
         now = datetime.now()
         
         for trigger in triggers:
+            signature = self._build_trigger_signature(trigger)
+            if signature is not None:
+                last_seen = self._recent_trigger_signatures.get(signature)
+                if last_seen and (now - last_seen).total_seconds() < 300:
+                    logger.debug(
+                        "duplicate_trigger_suppressed",
+                        type=trigger.type.value,
+                        signature=signature[1][:60],
+                    )
+                    continue
+
             cooldown = self._cooldown_seconds.get(trigger.type, 30)
             last_trigger = self._last_trigger_by_type.get(trigger.type)
             
             if last_trigger is None:
                 filtered.append(trigger)
+                if signature is not None:
+                    self._recent_trigger_signatures[signature] = now
             elif (now - last_trigger).total_seconds() >= cooldown:
                 filtered.append(trigger)
+                if signature is not None:
+                    self._recent_trigger_signatures[signature] = now
             else:
                 logger.debug(
                     "trigger_on_cooldown",
@@ -1089,6 +1215,21 @@ class TriggerEngine:
                 )
         
         return filtered
+
+    def _build_trigger_signature(self, trigger: Trigger) -> Optional[tuple[TriggerType, str]]:
+        """Build a coarse signature to suppress repeated proactive triggers on the same text."""
+        if trigger.type in {TriggerType.EXPLICIT_COMMAND, TriggerType.VOICE_ADDRESS}:
+            return None
+
+        signature_source = trigger.reason or trigger.relevant_transcript
+        if not signature_source:
+            return None
+
+        normalized = " ".join(self._tokenize(signature_source))[:160]
+        if not normalized:
+            return None
+
+        return (trigger.type, normalized)
     
     async def _check_loop(self):
         """Background loop that periodically checks for triggers."""
