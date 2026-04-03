@@ -1,0 +1,81 @@
+{
+  "meeting_id": "confused_engineers_fast_convo",
+  "description": "Two confused engineers discuss a backend issue rapidly and Alex should respond proactively without being explicitly addressed",
+  "tags": ["multi-speaker", "confusion", "proactive", "untagged", "fast-paced"],
+  "events": [
+    {
+      "type": "transcript",
+      "speaker": "Adarsh Bhardwaj",
+      "text": "Hey Abhishek, the API is returning 500 but logs are empty",
+      "is_final": true,
+      "delay_ms": 0
+    },
+    {
+      "type": "transcript",
+      "speaker": "Abhishek Singh",
+      "text": "That is weird, did you check if the middleware is swallowing the error?",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "transcript",
+      "speaker": "Adarsh Bhardwaj",
+      "text": "Yeah I checked, nothing there, even console logs are not printing",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "transcript",
+      "speaker": "Abhishek Singh",
+      "text": "Could it be failing before reaching the controller?",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "transcript",
+      "speaker": "Adarsh Bhardwaj",
+      "text": "But then why no logs at all, even request logger is not showing anything",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "transcript",
+      "speaker": "Abhishek Singh",
+      "text": "Hmm maybe it's a deployment issue or env config problem",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "transcript",
+      "speaker": "Adarsh Bhardwaj",
+      "text": "I am honestly confused now, nothing is making sense",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "transcript",
+      "speaker": "Abhishek Singh",
+      "text": "Same here, we are missing something basic I think",
+      "is_final": true,
+      "delay_ms": 500
+    },
+    {
+      "type": "wait",
+      "delay_ms": 1200
+    },
+    {
+      "type": "assert",
+      "condition": "trigger_fired",
+      "trigger_type": "repeated_confusion"
+    },
+    {
+      "type": "assert",
+      "condition": "no_trigger",
+      "trigger_type": "voice_address"
+    },
+    {
+      "type": "assert",
+      "condition": "response_sent"
+    }
+  ]
+}
