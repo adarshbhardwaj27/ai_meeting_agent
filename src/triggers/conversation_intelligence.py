@@ -115,7 +115,7 @@ _CONTRADICTION_EXPLORATORY_PHRASES = re.compile(
 _CONTRADICTION_ADDITIVE_PHRASES = re.compile(
     r"^(?:also|and|plus)\b|\b(?:also|in addition|we also need|we also have|"
     r"need to consider|must also|that could explain|which could explain|"
-    r"root cause|because|due to)\b",
+    r"root cause)\b",
     re.IGNORECASE,
 )
 _RETROSPECTIVE_ASSUMPTION_PHRASES = re.compile(

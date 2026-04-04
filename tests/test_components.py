@@ -656,6 +656,32 @@ class TestConversationIntelligence:
         assert contradictions[0].speaker_b == "Sarah"
 
     @pytest.mark.asyncio
+    async def test_detect_contradiction_with_causal_explanation_tail(self, intel, base_context):
+        """A real contradiction should still fire when the negated claim includes a causal explanation."""
+        earlier = [
+            TranscriptChunk(
+                text="Kafka can easily meet our 100 millisecond SLA.",
+                timestamp=datetime.now() - timedelta(minutes=3),
+                speaker="Mike",
+            )
+        ]
+        intel.score_signals(context=base_context, new_chunks=earlier)
+
+        later = [
+            TranscriptChunk(
+                text="Kafka cannot meet our 100 millisecond SLA because batching adds too much latency.",
+                timestamp=datetime.now(),
+                speaker="Sarah",
+            )
+        ]
+        signals = intel.score_signals(context=base_context, new_chunks=later)
+
+        contradictions = [s for s in signals if s.signal_type == SignalType.CONTRADICTION]
+        assert len(contradictions) >= 1
+        assert contradictions[0].speaker_a == "Mike"
+        assert contradictions[0].speaker_b == "Sarah"
+
+    @pytest.mark.asyncio
     async def test_no_contradiction_for_same_speaker_self_correction(self, intel, base_context):
         """Same speaker updating their own view should NOT fire a contradiction."""
         earlier = [
@@ -832,6 +858,41 @@ class TestConversationIntelligence:
         # Feed contradicting claim from different speaker
         later_chunk = TranscriptChunk(
             text="Our API does not support more than 200 requests per second.",
+            timestamp=datetime.now(),
+            speaker="Sarah",
+        )
+        context.recent_transcript.append(later_chunk)
+        triggers = await trigger_engine.check_for_triggers(
+            context=context, new_chunks=[later_chunk]
+        )
+
+        contradiction_triggers = [t for t in triggers if t.type == TriggerType.CONTRADICTION]
+        assert len(contradiction_triggers) >= 1
+        assert contradiction_triggers[0].signal_evidence_a is not None
+
+    @pytest.mark.asyncio
+    async def test_contradiction_with_causal_explanation_promoted_to_trigger(self):
+        """Strong negation with a trailing explanation should still promote to a contradiction trigger."""
+        trigger_engine = TriggerEngine()
+
+        context = MeetingContext(
+            meeting_id="promo_test_causal_contradiction",
+            meeting_started_at=datetime.now() - timedelta(minutes=10),
+            platform="test",
+        )
+
+        earlier_chunk = TranscriptChunk(
+            text="Kafka can easily meet our 100 millisecond SLA.",
+            timestamp=datetime.now() - timedelta(minutes=3),
+            speaker="Mike",
+        )
+        context.recent_transcript.append(earlier_chunk)
+        await trigger_engine.check_for_triggers(
+            context=context, new_chunks=[earlier_chunk]
+        )
+
+        later_chunk = TranscriptChunk(
+            text="Kafka cannot meet our 100 millisecond SLA because batching adds too much latency.",
             timestamp=datetime.now(),
             speaker="Sarah",
         )
