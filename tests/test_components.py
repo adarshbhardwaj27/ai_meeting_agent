@@ -2269,6 +2269,29 @@ class TestLLMServiceFallback:
         assert response.trigger.type == trigger_type
         assert snippet.split(".")[0].lower() in response.text.lower()
 
+    def test_trigger_response_goal_requires_resolution_for_contradiction(self):
+        """Contradiction responses should aim to resolve, not merely narrate the mismatch."""
+        goal = LLMService._build_trigger_response_goal(TriggerType.CONTRADICTION)
+
+        assert "resolve the mismatch" in goal.lower()
+        assert "do not just say the statements conflict" in goal.lower()
+
+    def test_trigger_response_goal_requires_source_of_truth_for_factual_inconsistency(self):
+        """Factual inconsistency responses should push toward a source-of-truth answer."""
+        goal = LLMService._build_trigger_response_goal(TriggerType.FACTUAL_INCONSISTENCY)
+
+        assert "source-of-truth" in goal.lower()
+        assert "do not just point out the inconsistency" in goal.lower()
+
+    def test_adjudication_prompt_includes_corrective_examples(self):
+        """The adjudication prompt should steer the model away from obvious-but-useless observations."""
+        service = LLMService()
+        prompt = service._build_trigger_adjudication_system_prompt()
+
+        assert "do not merely describe the problem back to the room" in prompt.lower()
+        assert "can we confirm the current deployment deadline and update the ticket?" in prompt.lower()
+        assert "can we confirm the source-of-truth limit before sizing the rollout?" in prompt.lower()
+
     @pytest.mark.asyncio
     async def test_voice_summary_uses_fast_path_without_llm(self, fallback_context):
         """Voice summarize requests should skip the LLM for lower latency."""

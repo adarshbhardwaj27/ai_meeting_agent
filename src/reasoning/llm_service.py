@@ -69,9 +69,10 @@ RULES:
 You noticed a potential conflict between what's being discussed now and an earlier concern.
 
 RULES:
-- One line pointing out the potential conflict
+- One line max
+- Tie the current proposal to the earlier concern or tradeoff
+- Prefer a corrective nudge: what should be checked, confirmed, or decided next
 - Be neutral, not alarming
-- Frame as observation, not warning
 - Make it easy to ignore if not relevant
 - No "I noticed" or "I observed" - just state it""",
 
@@ -107,7 +108,8 @@ There seems to be repeated confusion about something.
 
 RULES:
 - Brief clarification if you can provide one
-- Point out the confusion pattern if you can't clarify
+- Otherwise ask the single most useful alignment question or propose a short recap
+- Do not merely say people are confused
 - One line max
 - If confusion is complex, suggest they pause to align""",
 
@@ -124,8 +126,9 @@ RULES:
 You noticed that a current statement appears to contradict something said earlier.
 
 RULES:
-- One line quoting both statements neutrally
-- Frame as "Earlier [speaker] mentioned X, just now [speaker] said Y — worth clarifying?"
+- One line max
+- Prefer a resolution-oriented message: identify the mismatch and ask for the exact confirmation or update needed
+- If context clearly indicates the current or more reliable answer, state it briefly
 - Be genuinely helpful, not gotcha
 - If the contradiction is trivial or self-correction, return SKIP
 - Never take sides""",
@@ -143,9 +146,10 @@ RULES:
 Two statements contain different numbers or facts about the same topic.
 
 RULES:
-- One line noting both figures neutrally
-- Frame as "Just checking — earlier the figure was X, now it's Y"
-- Do NOT say which is correct
+- One line max
+- Prefer resolving the mismatch: cite both figures and ask for the source-of-truth confirmation
+- If context clearly identifies the confirmed value or source, state it briefly
+- Do not merely point out that the numbers differ
 - If the difference is insignificant or clearly a rounding, return SKIP""",
 
     TriggerType.COLLABORATION_OPPORTUNITY: """You are {bot_name}, a silent AI assistant observing a live meeting.
@@ -546,12 +550,62 @@ class LLMService:
             "If the evidence is concrete and directly useful, prefer a short response over skipping.\n"
             "Examples of concrete value: a real conflict with an earlier concern, repeated confusion that needs clarification, or a clear numeric mismatch.\n"
             "If you respond, the response must be 1-3 short lines, neutral, factual, and easy to ignore.\n"
+            "For contradiction, factual_inconsistency, repeated_confusion, and conflict_detected, do not merely describe the problem back to the room.\n"
+            "Prefer a corrective next step: clarify the exact point, ask for the source of truth, confirm the current decision, or provide the missing fact if the context already makes it clear.\n"
+            "Bad: John and Sarah have conflicting statements about the deployment deadline.\n"
+            "Better: Earlier John said Tuesday and Sarah said Thursday. Can we confirm the current deployment deadline and update the ticket?\n"
+            "Bad: There seems to be a discrepancy in the API capacity statements.\n"
+            "Better: Earlier we used 500 rps, now 200 rps was mentioned. Can we confirm the source-of-truth limit before sizing the rollout?\n"
             "Output exactly this format:\n"
             "Action: respond|skip\n"
             "Final Trigger: <one allowed trigger type>\n"
             "Reason: <one short sentence>\n"
             "Response:\n"
             "<assistant message, or NONE if Action: skip>"
+        )
+
+    @staticmethod
+    def _build_trigger_response_goal(trigger_type: TriggerType) -> str:
+        """Describe what a useful response should accomplish for this trigger."""
+        goals = {
+            TriggerType.CONFLICT_DETECTED: (
+                "Move the discussion forward by connecting the current proposal to the earlier concern "
+                "and naming the specific check, tradeoff, or decision the team should resolve now."
+            ),
+            TriggerType.DECISION_FORMING: (
+                "Help the team choose by naming the key tradeoff, decision frame, or next decision step that will unblock them."
+            ),
+            TriggerType.TOPIC_DRIFT: (
+                "Only redirect if it adds value; otherwise skip. If you respond, gently point back to the active topic or blocker."
+            ),
+            TriggerType.REPEATED_CONFUSION: (
+                "Clarify the point directly if the answer is available. Otherwise ask the crispest possible alignment question. "
+                "Do not just say the team is confused."
+            ),
+            TriggerType.CONTRADICTION: (
+                "Resolve the mismatch. If the current or authoritative answer is evident from context, state it briefly. "
+                "Otherwise ask for the precise confirmation or update needed. Do not just say the statements conflict."
+            ),
+            TriggerType.FACTUAL_INCONSISTENCY: (
+                "Resolve the numeric or factual mismatch. If a source-of-truth value is clear from context, state it. "
+                "Otherwise ask for source-of-truth confirmation. Do not just point out the inconsistency."
+            ),
+            TriggerType.COLLABORATION_OPPORTUNITY: (
+                "Connect the current thread to the overlooked concern, question, or dependency and suggest the practical follow-up."
+            ),
+            TriggerType.RISK_OVERLOOKED: (
+                "Re-surface the missing risk in a way that prompts a concrete check, mitigation, or owner discussion."
+            ),
+            TriggerType.CIRCULAR_DISCUSSION: (
+                "Summarize the stuck choice or suggest a lightweight decision frame only if it helps break the loop."
+            ),
+            TriggerType.MEMORY_GAP: (
+                "Answer the recall gap directly with the specific fact the team is trying to remember."
+            ),
+        }
+        return goals.get(
+            trigger_type,
+            "Add the most useful missing context in the least disruptive way.",
         )
 
     def _build_trigger_adjudication_user_prompt(
@@ -566,6 +620,8 @@ class LLMService:
         parts.append(f"Proposed Trigger: {trigger.type.value}")
         parts.append(f"Confidence: {trigger.confidence:.2f}")
         parts.append(f"Reason: {trigger.reason}")
+        parts.append("\n=== RESPONSE GOAL ===")
+        parts.append(self._build_trigger_response_goal(trigger.type))
 
         if trigger.signal_evidence_a or trigger.signal_evidence_b:
             parts.append("\n=== SIGNAL EVIDENCE ===")
@@ -695,6 +751,7 @@ class LLMService:
         else:
             parts.append("\n=== TASK ===")
             parts.append("Generate a brief chat message (1-3 lines max) based on the trigger.")
+            parts.append(self._build_trigger_response_goal(trigger.type))
             parts.append("If no message is needed, respond with just: SKIP")
         
         return "\n".join(parts)
