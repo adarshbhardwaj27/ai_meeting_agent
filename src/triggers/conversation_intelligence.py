@@ -56,6 +56,7 @@ _FACTUAL_CONFIDENCE_FLOOR = 0.55
 _COLLABORATION_CONFIDENCE_FLOOR = 0.45
 _ASSERTION_MAX_AGE_MINUTES = 30
 _MIN_KEYWORD_OVERLAP_FOR_RELATION = 2
+_COLLABORATION_MIN_CONCERN_AGE = timedelta(minutes=4)
 _NEGATION_WORDS = frozenset({
     "not", "no", "never", "don't", "dont", "doesn't", "doesnt",
     "shouldn't", "shouldnt", "won't", "wont", "can't", "cant",
@@ -93,6 +94,39 @@ _STOPWORDS: frozenset[str] = frozenset({
 _NUMERIC_CLAIM = re.compile(
     r"\b\d+(?:\.\d+)?(?:\s*(?:%|percent|ms|millisecond|second|minute|hour"
     r"|day|week|month|gb|mb|kb|tb|k|m|x|times|users?|requests?|calls?))\b",
+    re.IGNORECASE,
+)
+_GENERIC_RELATION_TERMS = frozenset({
+    "action", "actions", "add", "approach", "approaches", "change", "changes",
+    "consider", "considering", "contract", "contracts", "decide", "decision",
+    "decisions", "define", "doc", "docs", "document", "documents", "flow",
+    "item", "items", "long", "need", "needs", "option", "options", "owner",
+    "owners", "plan", "plans", "question", "questions", "scope", "short",
+    "step", "steps", "support", "supports", "term", "terms", "test", "tests",
+    "today", "update", "updates", "work", "works",
+})
+_CONTRADICTION_EXPLORATORY_PHRASES = re.compile(
+    r"\b(?:if we|can we|should we|could we|would we|option(?:s)?|alternatively|"
+    r"short-term|long-term|leaning|prefer(?:s)?|suggest(?:s|ed)?|spike|toggle|"
+    r"unclear|who should|need to decide|need to consider|action items?|next steps?|"
+    r"rollback|hotfix|want(?:s)?|requested|asking for|asked for|require(?:s|d)?)\b",
+    re.IGNORECASE,
+)
+_CONTRADICTION_ADDITIVE_PHRASES = re.compile(
+    r"^(?:also|and|plus)\b|\b(?:also|in addition|we also need|we also have|"
+    r"need to consider|must also|that could explain|which could explain|"
+    r"root cause|because|due to)\b",
+    re.IGNORECASE,
+)
+_RETROSPECTIVE_ASSUMPTION_PHRASES = re.compile(
+    r"\b(?:assumed|thought|expected|planned|intended|didn't realize|did not realize)\b",
+    re.IGNORECASE,
+)
+_COLLABORATION_ALREADY_COVERED_PHRASES = re.compile(
+    r"\b(?:let'?s|we(?:'ll| will)|i(?:'ll| will)|action items?|next steps?|"
+    r"can we|pick|choose|decide|owner|assign|schedule|define|update|patch|"
+    r"hotfix|rollback|acceptable|works?|manual sign-off|approval sla|"
+    r"short-term|long-term|combined approach)\b",
     re.IGNORECASE,
 )
 
@@ -162,7 +196,7 @@ class ConversationIntelligence:
         # Prune stale assertions
         self._prune_old_assertions()
 
-        return signals
+        return self._dedupe_signals(signals)
 
     # ══════════════════════════════════════════════════════════════════
     #  Assertion extraction
@@ -223,6 +257,10 @@ class ConversationIntelligence:
 
                 overlap = old.keywords & new.keywords
                 if len(overlap) < _MIN_KEYWORD_OVERLAP_FOR_RELATION:
+                    continue
+
+                substantive_overlap = self._substantive_overlap(overlap)
+                if self._should_skip_contradiction(old.text, new.text, substantive_overlap):
                     continue
 
                 # Polarity flip (one negated, one not)
@@ -421,10 +459,13 @@ class ConversationIntelligence:
         if len(recent_kw) < 3:
             return signals
 
+        if self._discussion_already_has_next_steps(combined):
+            return signals
+
         # Check unaddressed concerns that overlap with current speech
         for concern in context.unaddressed_concerns:
             age = datetime.now() - concern.raised_at
-            if age < timedelta(minutes=2):
+            if age < _COLLABORATION_MIN_CONCERN_AGE:
                 continue  # Too fresh — they still have it in mind
             concern_kw = self._content_keywords(concern.description)
             overlap = recent_kw & concern_kw
@@ -479,6 +520,51 @@ class ConversationIntelligence:
                 )
 
         return signals
+
+    @staticmethod
+    def _substantive_overlap(overlap: Set[str]) -> Set[str]:
+        """Remove generic planning words from overlap before contradiction scoring."""
+        return {token for token in overlap if token not in _GENERIC_RELATION_TERMS}
+
+    def _should_skip_contradiction(
+        self,
+        old_text: str,
+        new_text: str,
+        substantive_overlap: Set[str],
+    ) -> bool:
+        """Filter low-value contradiction pairs that are really planning or diagnosis."""
+        if not substantive_overlap:
+            return True
+
+        if _RETROSPECTIVE_ASSUMPTION_PHRASES.search(old_text) or _RETROSPECTIVE_ASSUMPTION_PHRASES.search(new_text):
+            return True
+
+        if _CONTRADICTION_EXPLORATORY_PHRASES.search(old_text) or _CONTRADICTION_EXPLORATORY_PHRASES.search(new_text):
+            return True
+
+        if _CONTRADICTION_ADDITIVE_PHRASES.search(new_text):
+            return True
+
+        return False
+
+    @staticmethod
+    def _discussion_already_has_next_steps(text: str) -> bool:
+        """Skip collaboration prompts when the team is already assigning actions or converging."""
+        return bool(_COLLABORATION_ALREADY_COVERED_PHRASES.search(text))
+
+    def _dedupe_signals(self, signals: List[SignalCandidate]) -> List[SignalCandidate]:
+        """Keep the highest-confidence signal per type and transcript span."""
+        deduped: Dict[Tuple[SignalType, str], SignalCandidate] = {}
+
+        for signal in signals:
+            signature_text = signal.relevant_transcript or signal.evidence_b or signal.reason
+            normalized_signature = " ".join(self._content_keywords(signature_text or ""))[:160]
+            key = (signal.signal_type, normalized_signature)
+            existing = deduped.get(key)
+            if existing is None or signal.confidence > existing.confidence:
+                deduped[key] = signal
+
+        return list(deduped.values())
 
     # ══════════════════════════════════════════════════════════════════
     #  Text utilities (shared across detectors)

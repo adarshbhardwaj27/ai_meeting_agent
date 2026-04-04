@@ -257,6 +257,9 @@ class Trigger:
     timestamp: datetime
     reason: str  # Human-readable explanation
     speaker: Optional[str] = None
+    proposed_type: Optional[TriggerType] = None
+    adjudication_action: Optional[str] = None
+    adjudication_reason: Optional[str] = None
     
     # For command triggers
     command_type: Optional[CommandType] = None

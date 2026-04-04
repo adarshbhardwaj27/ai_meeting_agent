@@ -10,6 +10,7 @@ All outputs are constrained to be 1-3 lines, neutral, and easy to ignore.
 """
 
 import asyncio
+from dataclasses import dataclass
 import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -22,6 +23,33 @@ from src.context.models import (
 )
 
 logger = structlog.get_logger()
+
+
+@dataclass(frozen=True)
+class TriggerAdjudication:
+    """Single-call LLM decision about whether and how a proactive trigger should respond."""
+
+    action: str
+    final_trigger_type: TriggerType
+    reason: str
+    response_text: str
+
+
+_ADJUDICATED_PROACTIVE_TRIGGER_TYPES = frozenset({
+    TriggerType.DECISION_FORMING,
+    TriggerType.CONFLICT_DETECTED,
+    TriggerType.TOPIC_DRIFT,
+    TriggerType.REPEATED_CONFUSION,
+    TriggerType.CONTRADICTION,
+    TriggerType.FACTUAL_INCONSISTENCY,
+    TriggerType.COLLABORATION_OPPORTUNITY,
+})
+
+_ADJUDICATION_OUTPUT_TRIGGER_TYPES = tuple(
+    trigger_type
+    for trigger_type in TriggerType
+    if trigger_type not in {TriggerType.EXPLICIT_COMMAND, TriggerType.VOICE_ADDRESS}
+)
 
 
 # System prompts for different trigger types
@@ -247,16 +275,44 @@ class LLMService:
         if fast_response_text is not None:
             response_text = fast_response_text
         else:
-            # Build the prompt
-            system_prompt = self._build_system_prompt(trigger)
-            user_prompt = self._build_user_prompt(trigger, context, recent_transcript)
-            
-            # Call LLM
-            response_text = await self._call_llm(
-                system_prompt,
-                user_prompt,
+            adjudication = await self._adjudicate_trigger(
                 trigger=trigger,
+                context=context,
+                recent_transcript=recent_transcript,
             )
+
+            if adjudication is not None:
+                trigger.adjudication_action = adjudication.action
+                trigger.adjudication_reason = adjudication.reason or None
+
+                logger.info(
+                    "trigger_adjudicated",
+                    proposed_trigger=(trigger.proposed_type or trigger.type).value,
+                    final_trigger=adjudication.final_trigger_type.value,
+                    action=adjudication.action,
+                )
+
+                if adjudication.action == "skip":
+                    logger.info(
+                        "llm_chose_to_skip",
+                        trigger=trigger.type.value,
+                        adjudication_reason=trigger.adjudication_reason,
+                    )
+                    return None
+
+                self._apply_adjudicated_trigger_type(trigger, adjudication.final_trigger_type)
+                response_text = adjudication.response_text
+            else:
+                # Build the prompt
+                system_prompt = self._build_system_prompt(trigger)
+                user_prompt = self._build_user_prompt(trigger, context, recent_transcript)
+
+                # Call LLM
+                response_text = await self._call_llm(
+                    system_prompt,
+                    user_prompt,
+                    trigger=trigger,
+                )
 
             if response_text is None:
                 response_text = self._build_local_fallback_response(
@@ -293,6 +349,31 @@ class LLMService:
         )
         
         return response
+
+    async def _adjudicate_trigger(
+        self,
+        trigger: Trigger,
+        context: MeetingContext,
+        recent_transcript: str,
+    ) -> Optional[TriggerAdjudication]:
+        """Use one LLM call to skip, confirm/retype, and generate the final response."""
+        if not self._should_adjudicate_trigger(trigger):
+            return None
+
+        system_prompt = self._build_trigger_adjudication_system_prompt()
+        user_prompt = self._build_trigger_adjudication_user_prompt(
+            trigger=trigger,
+            context=context,
+            recent_transcript=recent_transcript,
+        )
+        response_text = await self._call_llm(
+            system_prompt,
+            user_prompt,
+            trigger=trigger,
+            max_tokens_override=220,
+            temperature=0.2,
+        )
+        return self._parse_trigger_adjudication(response_text, trigger.type)
 
     async def summarize_context(
         self,
@@ -434,6 +515,100 @@ class LLMService:
             return "Yes, I'm here and listening."
 
         return None
+
+    def _should_adjudicate_trigger(self, trigger: Trigger) -> bool:
+        """Only adjudicate the proactive trigger classes that are currently noisy."""
+        if self._client is None:
+            return False
+
+        return trigger.type in _ADJUDICATED_PROACTIVE_TRIGGER_TYPES
+
+    @staticmethod
+    def _apply_adjudicated_trigger_type(trigger: Trigger, final_trigger_type: TriggerType) -> None:
+        """Persist the LLM-confirmed final trigger type on the live trigger object."""
+        if final_trigger_type != trigger.type:
+            trigger.proposed_type = trigger.proposed_type or trigger.type
+            trigger.type = final_trigger_type
+            trigger.adjudication_action = "retyped"
+        else:
+            trigger.adjudication_action = "confirmed"
+
+    def _build_trigger_adjudication_system_prompt(self) -> str:
+        """Prompt for single-call proactive trigger adjudication and response generation."""
+        allowed_types = ", ".join(trigger_type.value for trigger_type in _ADJUDICATION_OUTPUT_TRIGGER_TYPES)
+        return (
+            "You review a candidate proactive trigger for a live meeting assistant.\n"
+            "Decide whether the assistant should speak, and if so which proactive trigger type fits best.\n"
+            "Allowed final trigger types: "
+            f"{allowed_types}.\n"
+            "Never output explicit_command or voice_address.\n"
+            "If the moment is weak, redundant, already being handled by the team, or not worth interrupting, choose skip.\n"
+            "If the evidence is concrete and directly useful, prefer a short response over skipping.\n"
+            "Examples of concrete value: a real conflict with an earlier concern, repeated confusion that needs clarification, or a clear numeric mismatch.\n"
+            "If you respond, the response must be 1-3 short lines, neutral, factual, and easy to ignore.\n"
+            "Output exactly this format:\n"
+            "Action: respond|skip\n"
+            "Final Trigger: <one allowed trigger type>\n"
+            "Reason: <one short sentence>\n"
+            "Response:\n"
+            "<assistant message, or NONE if Action: skip>"
+        )
+
+    def _build_trigger_adjudication_user_prompt(
+        self,
+        trigger: Trigger,
+        context: MeetingContext,
+        recent_transcript: str,
+    ) -> str:
+        """Build the adjudication payload with trigger evidence and current meeting state."""
+        parts = []
+        parts.append("=== CANDIDATE TRIGGER ===")
+        parts.append(f"Proposed Trigger: {trigger.type.value}")
+        parts.append(f"Confidence: {trigger.confidence:.2f}")
+        parts.append(f"Reason: {trigger.reason}")
+
+        if trigger.signal_evidence_a or trigger.signal_evidence_b:
+            parts.append("\n=== SIGNAL EVIDENCE ===")
+            if trigger.signal_evidence_a:
+                speaker_a = trigger.signal_speaker_a or "Someone"
+                parts.append(f"Earlier ({speaker_a}): {trigger.signal_evidence_a}")
+            if trigger.signal_evidence_b:
+                speaker_b = trigger.signal_speaker_b or "Someone"
+                parts.append(f"Now ({speaker_b}): {trigger.signal_evidence_b}")
+
+        if trigger.relevant_transcript:
+            parts.append("\n=== RELEVANT TRANSCRIPT ===")
+            parts.append(trigger.relevant_transcript[-600:])
+
+        parts.append("\n=== MEETING CONTEXT ===")
+        parts.append(f"Duration: {int(context.meeting_duration.total_seconds() / 60)} minutes")
+        parts.append(f"Participants: {', '.join(context.participants) or 'Unknown'}")
+        if context.current_topic:
+            parts.append(f"Current Topic: {context.current_topic.name}")
+        if context.unaddressed_concerns:
+            parts.append(
+                "Open Concerns:\n" + "\n".join(
+                    f"- {concern.description} ({concern.severity.value})"
+                    for concern in context.unaddressed_concerns[:3]
+                )
+            )
+        if context.decisions_pending:
+            parts.append(
+                "Pending Decisions:\n" + "\n".join(
+                    f"- {decision.description} ({decision.status.value})"
+                    for decision in context.decisions_pending[:3]
+                )
+            )
+        if context.open_questions:
+            parts.append("Open Questions:\n" + "\n".join(f"- {question}" for question in context.open_questions[:3]))
+        if context.action_items:
+            parts.append("Action Items:\n" + "\n".join(f"- {item}" for item in context.action_items[:3]))
+        if context.historical_summary:
+            parts.append(f"Historical Summary:\n{context.historical_summary[:500]}")
+
+        parts.append("\n=== RECENT CONVERSATION ===")
+        parts.append(recent_transcript[-1800:] or "None")
+        return "\n".join(parts)
     
     def _build_system_prompt(self, trigger: Trigger) -> str:
         """Build the system prompt for the trigger type."""
@@ -963,6 +1138,100 @@ class LLMService:
             "" if relevant_transcript in {None, "", "None"} else relevant_transcript
         )
         return trigger
+
+    def _parse_trigger_adjudication(
+        self,
+        text: Optional[str],
+        proposed_trigger_type: TriggerType,
+    ) -> Optional[TriggerAdjudication]:
+        """Parse the combined adjudication-and-response LLM output."""
+        if not text or not text.strip():
+            return None
+
+        cleaned = text.strip()
+        if "Action:" not in cleaned and "Final Trigger:" not in cleaned:
+            return TriggerAdjudication(
+                action="respond",
+                final_trigger_type=proposed_trigger_type,
+                reason="LLM returned an unstructured answer; treated as confirmed.",
+                response_text=cleaned,
+            )
+
+        fields: Dict[str, str] = {}
+        response_lines: List[str] = []
+        in_response_block = False
+
+        for raw_line in cleaned.splitlines():
+            stripped = raw_line.strip()
+            if not stripped and not in_response_block:
+                continue
+
+            if in_response_block:
+                response_lines.append(raw_line.rstrip())
+                continue
+
+            if ":" not in stripped:
+                continue
+
+            key, value = stripped.split(":", 1)
+            normalized_key = key.strip().lower()
+            if normalized_key == "response":
+                in_response_block = True
+                if value.strip():
+                    response_lines.append(value.strip())
+            else:
+                fields[normalized_key] = value.strip()
+
+        action = fields.get("action", "respond").strip().lower()
+        final_trigger_type = self._coerce_adjudicated_trigger_type(
+            fields.get("final trigger"),
+            proposed_trigger_type,
+        )
+        reason = fields.get("reason") or ""
+        response_text = "\n".join(line for line in response_lines if line.strip()).strip()
+
+        if action in {"skip", "none", "no"}:
+            return TriggerAdjudication(
+                action="skip",
+                final_trigger_type=final_trigger_type,
+                reason=reason or "LLM chose to skip the proactive interruption.",
+                response_text="",
+            )
+
+        if not response_text or response_text.upper() == "NONE":
+            return TriggerAdjudication(
+                action="skip",
+                final_trigger_type=final_trigger_type,
+                reason=reason or "LLM declined to provide a response.",
+                response_text="",
+            )
+
+        return TriggerAdjudication(
+            action="respond",
+            final_trigger_type=final_trigger_type,
+            reason=reason,
+            response_text=response_text,
+        )
+
+    @staticmethod
+    def _coerce_adjudicated_trigger_type(
+        raw_value: Optional[str],
+        fallback: TriggerType,
+    ) -> TriggerType:
+        """Map a parsed trigger label back to a supported proactive trigger type."""
+        if not raw_value:
+            return fallback
+
+        normalized = raw_value.strip().lower().replace("-", "_").replace(" ", "_")
+        try:
+            trigger_type = TriggerType(normalized)
+        except ValueError:
+            return fallback
+
+        if trigger_type not in _ADJUDICATION_OUTPUT_TRIGGER_TYPES:
+            return fallback
+
+        return trigger_type
     
     def _enforce_constraints(self, text: str) -> str:
         """Enforce message length and formatting constraints."""

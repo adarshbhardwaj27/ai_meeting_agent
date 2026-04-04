@@ -279,6 +279,7 @@ class MeetingAssistant:
     async def _process_trigger(self, trigger: Trigger, context: MeetingContext):
         """Generate an LLM response for a trigger and send it to chat."""
         trigger_started_at = datetime.now()
+        initial_trigger_type = trigger.type
         logger.info(
             "processing_trigger",
             type=trigger.type.value,
@@ -311,6 +312,31 @@ class MeetingAssistant:
             generation_elapsed = (datetime.now() - generation_started_at).total_seconds()
             if self.meeting_logger:
                 self.meeting_logger.event("⏱️", f"Response generation: {generation_elapsed:.2f}s")
+
+            if trigger.adjudication_action == "retyped" and trigger.proposed_type:
+                logger.info(
+                    "trigger_retyped_for_response",
+                    proposed_trigger=trigger.proposed_type.value,
+                    final_trigger=trigger.type.value,
+                )
+                if self.meeting_logger:
+                    self.meeting_logger.event(
+                        "🧠",
+                        f"LLM retyped {trigger.proposed_type.value} -> {trigger.type.value}",
+                    )
+            elif trigger.adjudication_action == "skip":
+                logger.info(
+                    "trigger_skipped_by_adjudication",
+                    proposed_trigger=(trigger.proposed_type or initial_trigger_type).value,
+                    reason=trigger.adjudication_reason,
+                )
+                if self.meeting_logger:
+                    skip_type = trigger.proposed_type or initial_trigger_type
+                    reason = trigger.adjudication_reason or "no reason provided"
+                    self.meeting_logger.event(
+                        "🧠",
+                        f"LLM skipped {skip_type.value}: {reason}",
+                    )
 
             if response:
                 delivery_started_at = datetime.now()

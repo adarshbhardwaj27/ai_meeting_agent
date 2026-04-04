@@ -106,3 +106,4 @@ recordings/
 *_backup.py
 *_backup.*
 docs/ami_public_manual_1.6.2
+docs/train.csv

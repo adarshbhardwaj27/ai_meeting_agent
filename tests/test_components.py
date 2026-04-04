@@ -2131,6 +2131,145 @@ class TestLLMServiceFallback:
         assert response is None
 
     @pytest.mark.asyncio
+    async def test_noisy_proactive_trigger_can_be_retyped_in_single_llm_call(self, fallback_context):
+        """Noisy proactive triggers should be confirmable/retypable without a second LLM round-trip."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(
+            return_value=(
+                "Action: respond\n"
+                "Final Trigger: decision_forming\n"
+                "Reason: The team is choosing between short-term and long-term approaches.\n"
+                "Response:\n"
+                "The team is narrowing toward a short-term vs long-term decision."
+            )
+        )
+
+        trigger = Trigger.create_proactive(
+            TriggerType.TOPIC_DRIFT,
+            confidence=0.73,
+            reason="Conversation may have shifted away from the main topic.",
+        )
+        trigger.relevant_transcript = (
+            "This is blocking integration tests. Can we decide a short-term approach and a long-term contract?"
+        )
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert service._call_llm.await_count == 1
+        assert trigger.proposed_type == TriggerType.TOPIC_DRIFT
+        assert trigger.type == TriggerType.DECISION_FORMING
+        assert trigger.adjudication_action == "retyped"
+        assert response.trigger.type == TriggerType.DECISION_FORMING
+        assert "short-term" in response.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_noisy_proactive_trigger_can_be_skipped_in_single_llm_call(self, fallback_context):
+        """The adjudication path should be able to suppress low-value proactive interruptions."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(
+            return_value=(
+                "Action: skip\n"
+                "Final Trigger: collaboration_opportunity\n"
+                "Reason: The team is already handling the next steps explicitly.\n"
+                "Response:\n"
+                "NONE"
+            )
+        )
+
+        trigger = Trigger.create_proactive(
+            TriggerType.COLLABORATION_OPPORTUNITY,
+            confidence=0.66,
+            reason="Current discussion may relate to an earlier concern.",
+        )
+        trigger.relevant_transcript = "Action items: spike today, update acceptance criteria, and post findings in PAY-412."
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is None
+        assert service._call_llm.await_count == 1
+        assert trigger.type == TriggerType.COLLABORATION_OPPORTUNITY
+        assert trigger.proposed_type is None
+        assert trigger.adjudication_action == "skip"
+        assert "already handling" in (trigger.adjudication_reason or "")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("trigger_type", "reason", "snippet"),
+        [
+            (
+                TriggerType.CONFLICT_DETECTED,
+                "Decision about Kafka may conflict with an earlier latency concern.",
+                "Kafka may conflict with the earlier latency concern.",
+            ),
+            (
+                TriggerType.REPEATED_CONFUSION,
+                "Multiple signs of confusion detected around the rollback plan.",
+                "There is repeated confusion around the rollback plan.",
+            ),
+            (
+                TriggerType.FACTUAL_INCONSISTENCY,
+                "The request-per-second figures do not match.",
+                "The figures conflict: 500 requests per second earlier, 200 now.",
+            ),
+            (
+                TriggerType.DECISION_FORMING,
+                "The team is converging on a short-term versus long-term plan.",
+                "The team is choosing between short-term and long-term options.",
+            ),
+        ],
+    )
+    async def test_additional_proactive_types_use_single_call_adjudication(
+        self,
+        fallback_context,
+        trigger_type,
+        reason,
+        snippet,
+    ):
+        """Expanded proactive classes should use the adjudication path and still produce one final response."""
+        service = LLMService()
+        service._client = object()
+        service._call_llm = AsyncMock(
+            return_value=(
+                "Action: respond\n"
+                f"Final Trigger: {trigger_type.value}\n"
+                f"Reason: {reason}\n"
+                "Response:\n"
+                f"{snippet}"
+            )
+        )
+
+        trigger = Trigger.create_proactive(
+            trigger_type,
+            confidence=0.74,
+            reason=reason,
+        )
+        trigger.relevant_transcript = snippet
+
+        response = await service.generate_response(
+            trigger=trigger,
+            context=fallback_context,
+            recent_transcript=fallback_context.get_recent_text(minutes=5),
+        )
+
+        assert response is not None
+        assert service._call_llm.await_count == 1
+        assert trigger.type == trigger_type
+        assert trigger.adjudication_action == "confirmed"
+        assert response.trigger.type == trigger_type
+        assert snippet.split(".")[0].lower() in response.text.lower()
+
+    @pytest.mark.asyncio
     async def test_voice_summary_uses_fast_path_without_llm(self, fallback_context):
         """Voice summarize requests should skip the LLM for lower latency."""
         service = LLMService()

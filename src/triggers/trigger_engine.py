@@ -102,6 +102,9 @@ class TriggerEngine:
             (r"(?:agreed|ok|alright)[,.]? (?:we'll|let's) (.+)", 0.95),
             (r"(?:the decision is|it's decided|we've decided)[:\s]+ (.+)", 1.0),
             (r"(?:final answer|that's it)[,:]? (.+)", 0.9),
+            (r"can we (?:decide|pick|choose) (.+)", 0.8),
+            (r"we need to decide (.+)", 0.82),
+            (r"can we schedule .*(?:experiment|spike|evaluation|comparison)", 0.74),
         ]
         
         # Concern/risk language patterns  
@@ -256,7 +259,10 @@ class TriggerEngine:
             triggers.append(risk_trigger)
         
         # 4. Check for topic drift
-        drift_trigger = self._check_for_topic_drift(context, recent_text)
+        topic_window_text = self._get_topic_window_text(context, new_chunks)
+        drift_trigger = None
+        if not decision_trigger:
+            drift_trigger = self._check_for_topic_drift(context, topic_window_text)
         if drift_trigger:
             triggers.append(drift_trigger)
         
@@ -291,6 +297,8 @@ class TriggerEngine:
                 for prediction in fast_model_predictions
                 if prediction.accepted
             )
+
+        triggers = self._suppress_lower_value_triggers(triggers)
 
         # Filter out triggers on cooldown
         triggers = self._filter_cooldowns(triggers)
@@ -813,6 +821,24 @@ class TriggerEngine:
         cutoff = datetime.now() - timedelta(minutes=2)
         recent = [c for c in context.recent_transcript if c.timestamp >= cutoff]
         return " ".join(c.text for c in recent if c.is_final)
+
+    def _get_topic_window_text(
+        self,
+        context: MeetingContext,
+        new_chunks: Optional[List[TranscriptChunk]] = None,
+    ) -> str:
+        """Use a broader window for topic drift than for single-turn trigger checks."""
+        cutoff = datetime.now() - timedelta(minutes=2)
+        recent_chunks = [
+            chunk
+            for chunk in context.recent_transcript
+            if chunk.is_final and chunk.timestamp >= cutoff
+        ]
+
+        if len(recent_chunks) >= 2:
+            return " ".join(chunk.text for chunk in recent_chunks[-6:])
+
+        return self._get_recent_text(context, new_chunks)
     
     def _check_for_commands(self, chat_text: str) -> Optional[Trigger]:
         """Check if chat message contains a command for the bot."""
@@ -1028,6 +1054,9 @@ class TriggerEngine:
         recent_text: str
     ) -> Optional[Trigger]:
         """Check if the conversation has drifted from the active meeting focus."""
+        if self._looks_like_decision_or_resolution_window(recent_text):
+            return None
+
         recent_tokens = self._extract_keywords(recent_text)
         if len(recent_tokens) < config.trigger.topic_drift_min_tokens:
             return None
@@ -1108,11 +1137,37 @@ class TriggerEngine:
         sources.extend(context.open_questions[-3:])
         sources.extend(context.action_items[-3:])
 
+        recent_history = [
+            chunk.text
+            for chunk in context.recent_transcript
+            if chunk.is_final
+        ]
+        if len(recent_history) > 2:
+            sources.extend(recent_history[-8:-2])
+
         anchors: Set[str] = set()
         for source in sources:
             anchors.update(self._extract_keywords(source))
 
         return anchors
+
+    @staticmethod
+    def _looks_like_decision_or_resolution_window(text: str) -> bool:
+        """Topic drift should stay quiet when the team is actively deciding or assigning work."""
+        normalized = (text or "").lower()
+        if "action items" in normalized or "next steps" in normalized:
+            return True
+
+        if not re.search(r"\b(?:can we|we need to|let's|we'll|we will)\b", normalized):
+            return False
+
+        return bool(
+            re.search(
+                r"\b(?:decide|pick|choose|plan|approach|option|path|schedule|experiment|spike|"
+                r"rollback|hotfix|owner|update)\b",
+                normalized,
+            )
+        )
 
     def _is_topic_drift(
         self,
@@ -1266,6 +1321,29 @@ class TriggerEngine:
             return None
 
         return (trigger.type, normalized)
+
+    def _suppress_lower_value_triggers(self, triggers: List[Trigger]) -> List[Trigger]:
+        """Drop low-value triggers when the same turn already has a stronger intervention."""
+        if not triggers:
+            return triggers
+
+        present_types = {trigger.type for trigger in triggers}
+        suppressed_types: Set[TriggerType] = set()
+
+        if present_types & {TriggerType.DECISION_FORMING, TriggerType.CONFLICT_DETECTED}:
+            suppressed_types.update({TriggerType.TOPIC_DRIFT, TriggerType.COLLABORATION_OPPORTUNITY})
+        elif present_types & {
+            TriggerType.CONTRADICTION,
+            TriggerType.FACTUAL_INCONSISTENCY,
+            TriggerType.MEMORY_GAP,
+            TriggerType.RISK_OVERLOOKED,
+        }:
+            suppressed_types.add(TriggerType.COLLABORATION_OPPORTUNITY)
+
+        if not suppressed_types:
+            return triggers
+
+        return [trigger for trigger in triggers if trigger.type not in suppressed_types]
 
     def accept_external_triggers(self, triggers: List[Trigger]) -> List[Trigger]:
         """Apply standard cooldown and dedupe rules to externally produced triggers."""
