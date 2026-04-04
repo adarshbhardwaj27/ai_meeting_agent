@@ -1,0 +1,22 @@
+{
+  "model_name": "fast_trigger_linear_bootstrap",
+  "model_version": "artifact-past-session-only-v1",
+  "profiles": [
+    {
+      "trigger_type": "repeated_confusion",
+      "bias": -3.736077,
+      "threshold": 0.62,
+      "weights": {
+        "strong_confusion_ratio": -3.198396,
+        "soft_uncertainty_ratio": 1.3,
+        "question_turn_ratio": 0.185998,
+        "speaker_switch_ratio": -0.336077,
+        "uncertain_speaker_ratio": -2.165597,
+        "topic_overlap_ratio": 0.256547,
+        "issue_stall_ratio": -1.657302,
+        "turn_count_ratio": 5.36415,
+        "resolution_ratio": -1.2
+      }
+    }
+  ]
+}

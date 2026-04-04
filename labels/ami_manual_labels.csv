@@ -1,0 +1,22 @@
+example_id,meeting_id,window_index,human_label,should_trigger,trigger_type,model_suggestion_label,model_suggestion_trigger_type,model_suggestion_confidence,model_suggestion_reason,model_suggestion_source,topic,start_time,end_time,notes,transcript_text,created_at,updated_at
+EN2001a_0000,EN2001a,0,should_trigger,True,collaboration_opportunity,should_trigger,collaboration_opportunity,0.75,"Current conversation may answer the earlier open question: ""Does anyone want to see uh Steve's feedback from the specification?""",trigger_engine_replay,,3.168,20.816,,"E: 'Kay.
+E: Gosh.
+A: Okay.
+E: 'Kay.
+A: Does anyone want to see uh Steve's feedback from the specification?
+E: Is there much more in it than he d
+D: I I dry-read it the last time..
+A: Right.
+E: Is there much more in it than he said yesterday?",2026-04-04T10:59:42.661381+00:00,2026-04-04T10:59:42.661381+00:00
+EN2001a_0002,EN2001a,2,should_trigger,True,collaboration_opportunity,should_trigger,collaboration_opportunity,0.75,"Current conversation may answer the earlier open question: ""Is there much more in it than he said yesterday?""",trigger_engine_replay,,16.98,27.472,,"D: I I dry-read it the last time..
+A: Right.
+E: Is there much more in it than he said yesterday?
+D: [cough]
+E: Mm.
+E: Hmm. Hmm?",2026-04-04T11:00:44.423853+00:00,2026-04-04T11:00:44.423853+00:00
+EN2001a_0003,EN2001a,3,should_trigger,True,collaboration_opportunity,should_trigger,topic_drift,0.8,"Conversation has shifted away from the active meeting topic toward and, week, duplication",trigger_engine_replay,,20.944,47.618,,"D: [cough]
+E: Mm.
+E: Hmm. Hmm?
+A: Like duplication of effort and stuff, and um yeah, he was saying that we should maybe uh think about having a prototype for week six, which is next week. Yeah.
+D: Next week.
+A: So we should probably prioritize our packages.",2026-04-04T11:06:03.076883+00:00,2026-04-04T11:06:03.076883+00:00

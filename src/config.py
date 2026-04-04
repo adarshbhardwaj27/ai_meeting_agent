@@ -105,6 +105,15 @@ class TriggerConfig:
     topic_drift_min_tokens: int = field(
         default_factory=lambda: int(os.getenv("TOPIC_DRIFT_MIN_TOKENS", "8"))
     )
+    model_artifact_path: Optional[str] = field(
+        default_factory=lambda: os.getenv("TRIGGER_MODEL_ARTIFACT_PATH")
+    )
+    enable_model_logging: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_TRIGGER_MODEL_LOGGING", "false").lower() == "true"
+    )
+    model_log_path: str = field(
+        default_factory=lambda: os.getenv("TRIGGER_MODEL_LOG_PATH", "logs/trigger_model_events.jsonl")
+    )
 
 
 @dataclass

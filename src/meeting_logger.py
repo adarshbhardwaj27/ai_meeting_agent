@@ -12,12 +12,14 @@ Log file:  logs/meeting_sessions.log  (auto-created, append-mode)
 
 import os
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Optional
 
 # Default log location
 _LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 _LOG_FILE = _LOG_DIR / "meeting_sessions.log"
+_EVENT_LOG_FILE = _LOG_DIR / "meeting_session_events.jsonl"
 
 
 class MeetingLogger:
@@ -39,6 +41,10 @@ class MeetingLogger:
         log_file: Optional[str] = None,
     ):
         self._log_path = Path(log_file) if log_file else _LOG_FILE
+        if log_file:
+            self._event_log_path = self._log_path.with_name(f"{self._log_path.stem}_events.jsonl")
+        else:
+            self._event_log_path = _EVENT_LOG_FILE
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._meeting_id = meeting_id
@@ -58,6 +64,33 @@ class MeetingLogger:
         self._file.write(f"  Source:        {source}\n")
         self._file.write("=" * 80 + "\n")
         self._file.flush()
+        self._write_structured_record(
+            event_type="session_start",
+            payload={
+                "started_at": self._start_time.isoformat(),
+            },
+            occurred_at=self._start_time,
+        )
+
+    def _write_structured_record(
+        self,
+        *,
+        event_type: str,
+        payload: Optional[dict] = None,
+        occurred_at: Optional[datetime] = None,
+    ):
+        record = {
+            "event_type": event_type,
+            "timestamp": (occurred_at or datetime.now()).isoformat(),
+            "meeting_id": self._meeting_id,
+            "source": self._source,
+            "session_started_at": self._start_time.isoformat(),
+        }
+        if payload:
+            record.update(payload)
+
+        with self._event_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
     # ── Core write ───────────────────────────────────────────────────
 
@@ -80,11 +113,27 @@ class MeetingLogger:
         label = "🎤" if is_final else "💬"
         lat = f" ⏱️{latency}" if latency else ""
         self.log(f"{label} [{speaker}]: {text}{lat}")
+        self._write_structured_record(
+            event_type="transcript",
+            payload={
+                "speaker": speaker,
+                "text": text,
+                "is_final": is_final,
+                "latency": latency,
+            },
+        )
 
     def bot_response(self, text: str, trigger_type: str = ""):
         """Log a bot response sent to chat."""
         extra = f" ({trigger_type})" if trigger_type else ""
         self.log(f"🤖 Sent{extra}: {text}")
+        self._write_structured_record(
+            event_type="bot_response",
+            payload={
+                "text": text,
+                "trigger_type": trigger_type,
+            },
+        )
 
     def trigger_fired(
         self,
@@ -102,23 +151,48 @@ class MeetingLogger:
         if confidence:
             parts.append(f"conf={confidence:.2f}")
         self.log("  ".join(parts))
+        self._write_structured_record(
+            event_type="trigger_fired",
+            payload={
+                "trigger_type": trigger_type,
+                "speaker": speaker,
+                "text": text,
+                "confidence": confidence,
+            },
+        )
 
     def event(self, emoji: str, message: str):
         """Log a general event (startup, shutdown, etc.)."""
         self.log(f"{emoji} {message}")
+        self._write_structured_record(
+            event_type="event",
+            payload={
+                "emoji": emoji,
+                "message": message,
+            },
+        )
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def close(self):
         """Write session footer and close the file."""
-        duration = (datetime.now() - self._start_time).total_seconds()
+        closed_at = datetime.now()
+        duration = (closed_at - self._start_time).total_seconds()
         self._file.write("-" * 80 + "\n")
         self._file.write(
-            f"  SESSION END: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"  SESSION END: {closed_at.strftime('%Y-%m-%d %H:%M:%S')}"
             f"  (duration: {duration:.1f}s)\n"
         )
         self._file.write("-" * 80 + "\n\n")
         self._file.flush()
+        self._write_structured_record(
+            event_type="session_end",
+            payload={
+                "ended_at": closed_at.isoformat(),
+                "duration_seconds": round(duration, 3),
+            },
+            occurred_at=closed_at,
+        )
         self._file.close()
 
     def __enter__(self):

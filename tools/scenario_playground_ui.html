@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scenario Playground</title>
+  <style>
+    :root {
+      --ink: #1e293b;
+      --muted: #5b6676;
+      --bg: #f4efe7;
+      --panel: rgba(255, 251, 246, 0.95);
+      --line: #d8ccb9;
+      --accent: #0b7a75;
+      --accent-soft: #dbefec;
+      --warn: #a16207;
+      --success: #1f6a47;
+      --danger: #b5473e;
+      --shadow: 0 12px 36px rgba(30, 41, 59, 0.08);
+      --radius: 18px;
+      --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--ink);
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(11, 122, 117, 0.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(161, 98, 7, 0.12), transparent 24%),
+        linear-gradient(180deg, #f8f2ea 0%, #f0e9df 100%);
+    }
+
+    .shell {
+      width: min(1380px, 100% - 32px);
+      margin: 20px auto 40px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero {
+      padding: 22px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.1;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.05fr 1.35fr;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    textarea, input[type="number"], input[type="file"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font: inherit;
+      background: white;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 260px;
+      resize: vertical;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 11px 16px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-secondary { background: #e7ddd0; color: var(--ink); }
+
+    .toolbar-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #fff3d9;
+      color: #6a4d17;
+      font-weight: 600;
+      white-space: pre-wrap;
+    }
+
+    .status.success { background: #dff4e9; color: var(--success); }
+    .status.error { background: #f8dfdb; color: var(--danger); }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 14px;
+      border-radius: 16px;
+      background: white;
+      border: 1px solid #e6dbc9;
+      display: grid;
+      gap: 6px;
+    }
+
+    .metric strong {
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .timeline {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+      max-height: 72vh;
+      overflow: auto;
+    }
+
+    .event {
+      padding: 14px;
+      border-radius: 16px;
+      background: white;
+      border: 1px solid #e6dbc9;
+      display: grid;
+      gap: 8px;
+    }
+
+    .event.system { border-left: 4px solid #64748b; }
+    .event.transcript { border-left: 4px solid #0b7a75; }
+    .event.chat { border-left: 4px solid #a16207; }
+    .event.trigger { border-left: 4px solid #b5473e; }
+    .event.response { border-left: 4px solid #1f6a47; }
+    .event.wait { border-left: 4px solid #8b5cf6; }
+
+    .event-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .event-kind {
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .event-time {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .event-body {
+      white-space: pre-wrap;
+      line-height: 1.55;
+      font-size: 15px;
+    }
+
+    .examples {
+      background: #fffdf9;
+      border: 1px dashed var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    code, pre {
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      background: #f6f3ee;
+      border-radius: 12px;
+      overflow: auto;
+      font-size: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .layout, .control-grid, .summary-grid {
+        grid-template-columns: 1fr;
+      }
+      .timeline { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="card hero">
+      <h1>Scenario Playground</h1>
+      <div class="subtle">Upload a JSON conversation or paste one directly, replay it through the real trigger pipeline, and watch transcript, triggers, and mock responses appear as the scenario runs.</div>
+    </section>
+
+    <section class="layout">
+      <div class="card panel">
+        <label>
+          Upload JSON file
+          <input id="jsonFile" type="file" accept="application/json,.json">
+        </label>
+
+        <label>
+          Or paste JSON
+          <textarea id="jsonText" placeholder='{
+  "meeting_id": "demo_run",
+  "conversation": [
+    {"speaker": "John", "text": "The deadline is Friday."},
+    {"speaker": "Sarah", "text": "The deadline is not Friday, it is Monday.", "delay_ms": 1500}
+  ]
+}'></textarea>
+        </label>
+
+        <div class="control-grid">
+          <label>
+            Default Delay (ms)
+            <input id="defaultDelay" type="number" min="0" value="1200">
+          </label>
+          <label>
+            Final Settle (ms)
+            <input id="finalWait" type="number" min="0" value="1800">
+          </label>
+          <label>
+            Playback Speed
+            <input id="playbackSpeed" type="number" min="0.1" step="0.1" value="1.0">
+          </label>
+        </div>
+
+        <div class="toolbar-row">
+          <button id="runButton" class="btn-primary">Run Scenario</button>
+          <button id="loadExample" class="btn-secondary">Load Example</button>
+        </div>
+
+        <div id="statusBox" class="status">Ready.</div>
+
+        <div class="examples">
+          <div class="subtle">Accepted formats</div>
+          <pre>{
+  "meeting_id": "contradiction_demo",
+  "events": [
+    {"type": "transcript", "speaker": "John", "text": "The deadline is Friday.", "delay_ms": 0},
+    {"type": "transcript", "speaker": "Sarah", "text": "The deadline is not Friday, it is Monday.", "delay_ms": 1500}
+  ]
+}</pre>
+          <pre>{
+  "meeting_id": "simple_conversation",
+  "conversation": [
+    {"speaker": "Adarsh", "text": "@Alex summarize what we discussed", "type": "chat"}
+  ]
+}</pre>
+        </div>
+      </div>
+
+      <div class="card panel">
+        <div class="summary-grid">
+          <div class="metric"><span class="subtle">Status</span><strong id="metricStatus">Idle</strong></div>
+          <div class="metric"><span class="subtle">Inputs</span><strong id="metricInputs">0</strong></div>
+          <div class="metric"><span class="subtle">Triggers</span><strong id="metricTriggers">0</strong></div>
+          <div class="metric"><span class="subtle">Responses</span><strong id="metricResponses">0</strong></div>
+        </div>
+        <div class="subtle" id="summaryText">No run started yet.</div>
+        <div class="timeline" id="timelinePanel">
+          <div class="event system">
+            <div class="event-head">
+              <div class="event-kind">System</div>
+              <div class="event-time">0.0s</div>
+            </div>
+            <div class="event-body">Upload or paste a JSON scenario, then click Run Scenario.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      activeJobId: null,
+      lastEventIndex: 0,
+      pollHandle: null,
+    };
+
+    const jsonFile = document.getElementById('jsonFile');
+    const jsonText = document.getElementById('jsonText');
+    const defaultDelay = document.getElementById('defaultDelay');
+    const finalWait = document.getElementById('finalWait');
+    const playbackSpeed = document.getElementById('playbackSpeed');
+    const statusBox = document.getElementById('statusBox');
+    const timelinePanel = document.getElementById('timelinePanel');
+    const metricStatus = document.getElementById('metricStatus');
+    const metricInputs = document.getElementById('metricInputs');
+    const metricTriggers = document.getElementById('metricTriggers');
+    const metricResponses = document.getElementById('metricResponses');
+    const summaryText = document.getElementById('summaryText');
+
+    function setStatus(message, kind = '') {
+      statusBox.textContent = message;
+      statusBox.className = `status${kind ? ` ${kind}` : ''}`;
+    }
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Request failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function appendEvent(event) {
+      const body = buildEventBody(event);
+      const html = `
+        <article class="event ${escapeHtml(event.kind)}">
+          <div class="event-head">
+            <div class="event-kind">${escapeHtml(event.kind)}</div>
+            <div class="event-time">${Number(event.relative_seconds || 0).toFixed(1)}s</div>
+          </div>
+          <div class="event-body">${body}</div>
+        </article>
+      `;
+      timelinePanel.insertAdjacentHTML('beforeend', html);
+      timelinePanel.scrollTop = timelinePanel.scrollHeight;
+    }
+
+    function buildEventBody(event) {
+      if (event.kind === 'transcript' || event.kind === 'chat') {
+        const prefix = event.speaker ? `${event.speaker}: ` : '';
+        return `${escapeHtml(prefix)}${escapeHtml(event.text || '')}`;
+      }
+      if (event.kind === 'trigger') {
+        return `${escapeHtml(event.trigger_type || 'unknown')} • ${(Number(event.confidence || 0) * 100).toFixed(0)}%\n${escapeHtml(event.reason || '')}${event.relevant_transcript ? `\n\n${escapeHtml(event.relevant_transcript)}` : ''}`;
+      }
+      if (event.kind === 'response') {
+        return `${escapeHtml(event.trigger_type || 'unknown')}\n${escapeHtml(event.text || '')}`;
+      }
+      if (event.kind === 'wait') {
+        return `Waiting ${escapeHtml(event.delay_ms || 0)} ms${event.phase ? ` (${escapeHtml(event.phase)})` : ''}`;
+      }
+      return escapeHtml(JSON.stringify(event, null, 2));
+    }
+
+    function resetTimeline() {
+      timelinePanel.innerHTML = '';
+    }
+
+    function updateMetrics(job) {
+      metricStatus.textContent = job.status || 'unknown';
+      metricInputs.textContent = String(job.input_event_count || 0);
+      metricTriggers.textContent = String(job.summary?.trigger_count || 0);
+      metricResponses.textContent = String(job.summary?.response_count || 0);
+      summaryText.textContent = `${job.meeting_id || 'uploaded_scenario'} • ${job.source_format || 'unknown format'} • speed ${job.playback_speed || 1.0}x`;
+    }
+
+    async function pollJob() {
+      if (!state.activeJobId) {
+        return;
+      }
+
+      try {
+        const payload = await fetchJson(`/api/jobs/${state.activeJobId}?after_index=${state.lastEventIndex}`);
+        const { job, events } = payload;
+        updateMetrics(job);
+        events.forEach((event) => {
+          appendEvent(event);
+          state.lastEventIndex = event.index + 1;
+        });
+
+        if (job.status === 'completed') {
+          setStatus(`Completed in ${Number(job.summary?.duration_seconds || 0).toFixed(2)}s.`, 'success');
+          stopPolling();
+        } else if (job.status === 'failed') {
+          setStatus(job.error || 'Scenario failed.', 'error');
+          stopPolling();
+        }
+      } catch (error) {
+        setStatus(error.message, 'error');
+        stopPolling();
+      }
+    }
+
+    function stopPolling() {
+      if (state.pollHandle) {
+        clearInterval(state.pollHandle);
+        state.pollHandle = null;
+      }
+    }
+
+    async function runScenario() {
+      stopPolling();
+      resetTimeline();
+      state.lastEventIndex = 0;
+      metricTriggers.textContent = '0';
+      metricResponses.textContent = '0';
+
+      const formData = new FormData();
+      if (jsonFile.files[0]) {
+        formData.append('json_file', jsonFile.files[0]);
+      }
+      if (jsonText.value.trim()) {
+        formData.append('json_text', jsonText.value.trim());
+      }
+      formData.append('default_delay_ms', defaultDelay.value || '1200');
+      formData.append('final_wait_ms', finalWait.value || '1800');
+      formData.append('playback_speed', playbackSpeed.value || '1.0');
+
+      try {
+        setStatus('Starting replay...', '');
+        const payload = await fetchJson('/api/run', { method: 'POST', body: formData });
+        state.activeJobId = payload.job.job_id;
+        updateMetrics(payload.job);
+        setStatus('Replay started. Timeline will update as the scenario runs.', 'success');
+        state.pollHandle = setInterval(pollJob, 400);
+        await pollJob();
+      } catch (error) {
+        setStatus(error.message, 'error');
+      }
+    }
+
+    document.getElementById('runButton').addEventListener('click', runScenario);
+    document.getElementById('loadExample').addEventListener('click', () => {
+      jsonText.value = JSON.stringify({
+        meeting_id: 'quick_contradiction_demo',
+        description: 'Uploaded demo that should trigger contradiction.',
+        conversation: [
+          { speaker: 'John', text: 'The deployment deadline is Friday.' },
+          { speaker: 'Sarah', text: 'The deployment deadline is not Friday, it is Monday.', delay_ms: 1600 },
+        ],
+        final_wait_ms: 2200,
+      }, null, 2);
+      jsonFile.value = '';
+    });
+  </script>
+</body>
+</html>

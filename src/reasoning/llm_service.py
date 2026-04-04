@@ -303,23 +303,9 @@ class LLMService:
         if self._client is None or not chunks:
             return None
 
-        transcript_lines = []
-        for chunk in chunks:
-            text = " ".join((chunk.text or "").split()).strip()
-            if not text:
-                continue
-            speaker = chunk.speaker or "Unknown"
-            transcript_lines.append(f"[{speaker}] {text}")
-
+        transcript_lines = self._prepare_summary_transcript_lines(chunks)
         if not transcript_lines:
             return None
-
-        if len(transcript_lines) > 16:
-            transcript_lines = (
-                transcript_lines[:6]
-                + [f"[{len(transcript_lines) - 12} intermediate utterances omitted]"]
-                + transcript_lines[-6:]
-            )
 
         system_prompt = (
             "You compress meeting history into a clean persistent memory for later LLM use.\n"
@@ -354,6 +340,52 @@ class LLMService:
             model_override=self._summary_model,
         )
         return self._sanitize_context_summary(response_text)
+
+    async def audit_summary_for_factual_errors(
+        self,
+        existing_summary: str,
+        chunks: List[TranscriptChunk],
+    ) -> Optional[Trigger]:
+        """Use the summary-time LLM pass to catch factual issues worth surfacing."""
+        if self._client is None or not chunks:
+            return None
+
+        transcript_lines = self._prepare_summary_transcript_lines(chunks)
+        if not transcript_lines:
+            return None
+
+        system_prompt = (
+            "You audit meeting memory for material factual inconsistencies worth surfacing as a proactive trigger.\n"
+            "Flag issues like:\n"
+            "- obvious arithmetic or factual errors in a statement\n"
+            "- materially conflicting figures or facts about the same topic\n"
+            "Do not flag speculation, opinion differences, tentative estimates, or clean self-corrections.\n"
+            "Output plain text with exactly these six lines:\n"
+            "Trigger: yes|no\n"
+            "Confidence: 0.00 to 1.00\n"
+            "Reason: ...\n"
+            "Evidence A: ...\n"
+            "Evidence B: ...\n"
+            "Relevant Transcript: ...\n"
+            "If there is no worthwhile inconsistency, output Trigger: no and use None for the other fields."
+        )
+
+        user_prompt = (
+            "Existing persistent meeting memory:\n"
+            f"{(existing_summary or 'None')[:1200]}\n\n"
+            "New older transcript under review:\n"
+            f"{'\n'.join(transcript_lines)}\n\n"
+            "Should a factual_inconsistency trigger be raised now?"
+        )
+
+        response_text = await self._call_llm(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=180,
+            temperature=0.1,
+            model_override=self._summary_model,
+        )
+        return self._parse_summary_factual_audit(response_text)
 
     def _build_fast_voice_response(
         self,
@@ -871,6 +903,66 @@ class LLMService:
         if len(normalized) > 1000:
             normalized = normalized[:997].rstrip() + "..."
         return normalized
+
+    @staticmethod
+    def _prepare_summary_transcript_lines(chunks: List[TranscriptChunk]) -> List[str]:
+        """Normalize transcript chunks for summary-time LLM calls."""
+        transcript_lines = []
+        for chunk in chunks:
+            text = " ".join((chunk.text or "").split()).strip()
+            if not text:
+                continue
+            speaker = chunk.speaker or "Unknown"
+            transcript_lines.append(f"[{speaker}] {text}")
+
+        if len(transcript_lines) > 16:
+            transcript_lines = (
+                transcript_lines[:6]
+                + [f"[{len(transcript_lines) - 12} intermediate utterances omitted]"]
+                + transcript_lines[-6:]
+            )
+
+        return transcript_lines
+
+    def _parse_summary_factual_audit(self, text: Optional[str]) -> Optional[Trigger]:
+        """Parse summary-audit output into a factual inconsistency trigger."""
+        if not text or not text.strip():
+            return None
+
+        fields: Dict[str, str] = {}
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            fields[key.strip().lower()] = value.strip()
+
+        if fields.get("trigger", "no").lower() not in {"yes", "true"}:
+            return None
+
+        confidence = 0.78
+        try:
+            confidence = float(fields.get("confidence", confidence))
+        except (TypeError, ValueError):
+            confidence = 0.78
+        confidence = max(0.0, min(confidence, 1.0))
+
+        reason = fields.get("reason") or "LLM summary audit found a likely factual inconsistency."
+        evidence_a = fields.get("evidence a")
+        evidence_b = fields.get("evidence b")
+        relevant_transcript = fields.get("relevant transcript")
+
+        trigger = Trigger.create_proactive(
+            trigger_type=TriggerType.FACTUAL_INCONSISTENCY,
+            confidence=confidence,
+            reason=reason,
+        )
+        trigger.signal_evidence_a = None if evidence_a in {None, "", "None"} else evidence_a
+        trigger.signal_evidence_b = None if evidence_b in {None, "", "None"} else evidence_b
+        trigger.relevant_transcript = (
+            "" if relevant_transcript in {None, "", "None"} else relevant_transcript
+        )
+        return trigger
     
     def _enforce_constraints(self, text: str) -> str:
         """Enforce message length and formatting constraints."""

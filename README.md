@@ -132,8 +132,13 @@ All configuration is in `.env`. Key settings:
 | `ELEVENLABS_LATENCY_MODE` | ElevenLabs latency optimization mode | Default: `3` |
 | `ENABLE_PROACTIVE_MESSAGES` | Allow unsolicited observations | Default: true |
 | `MIN_SECONDS_BETWEEN_PROACTIVE` | Cooldown between proactive messages | Default: 30 |
+| `TRIGGER_MODEL_ARTIFACT_PATH` | Optional path to a small offline-trained trigger model artifact | No |
+| `ENABLE_TRIGGER_MODEL_LOGGING` | Write fast-model feature vectors and outcomes for offline training | Default: false |
+| `TRIGGER_MODEL_LOG_PATH` | JSONL log path for trigger-model training data | Default: `logs/trigger_model_events.jsonl` |
 
 If you want a cheaper model for background memory compaction than for live replies, set `CONTEXT_SUMMARY_MODEL`. If you leave it unset, the assistant reuses `OPENAI_MODEL`.
+
+The trigger engine now includes an artifact-backed fast local scorer for proactive interventions. Keep `TRIGGER_MODEL_ARTIFACT_PATH` empty to use the bundled bootstrap artifact, or point it at a newer offline-trained artifact when available. Enable `ENABLE_TRIGGER_MODEL_LOGGING` when you want to collect JSONL training data from live sessions.
 
 See `.env.example` for the full list.
 
@@ -145,7 +150,26 @@ python -m pytest
 
 # Run simulation mode (no API keys needed for trigger/context tests)
 python -m src.main --simulate
+
+# Run the browser playground for uploaded JSON scenarios
+c:/Users/Adarsh.Bhardwaj/codes/meet_ai_agent/venv/Scripts/python.exe tools/scenario_playground_app.py
+# Then open http://127.0.0.1:8769
 ```
+
+The scenario playground accepts either full E2E-style JSON with an `events` array or simpler uploaded conversation JSON like:
+
+```json
+{
+        "meeting_id": "quick_demo",
+        "conversation": [
+                {"speaker": "John", "text": "The deadline is Friday."},
+                {"speaker": "Sarah", "text": "The deadline is not Friday, it is Monday.", "delay_ms": 1500}
+        ],
+        "final_wait_ms": 2200
+}
+```
+
+It replays the conversation through the real assistant pipeline and shows transcript, trigger, and response events in the browser without requiring you to save the case as a permanent local E2E file.
 
 ## Architecture Layers
 

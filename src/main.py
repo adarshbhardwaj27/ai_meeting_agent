@@ -137,6 +137,12 @@ class MeetingAssistant:
                 platform=self.platform.value,
                 on_context_updated=self._on_context_updated,
                 context_summarizer=self.llm_service.summarize_context,
+                summary_trigger_auditor=getattr(
+                    self.llm_service,
+                    "audit_summary_for_factual_errors",
+                    None,
+                ),
+                on_summary_trigger=self._on_summary_trigger,
             )
 
             # 5. Trigger engine (decides when to speak)
@@ -440,6 +446,15 @@ class MeetingAssistant:
 
     def _on_context_updated(self, context: MeetingContext):
         pass  # Hook for future UI / debugging
+
+    async def _on_summary_trigger(self, trigger: Trigger, context: MeetingContext):
+        """Process summary-time triggers through the same path as live triggers."""
+        if not self.trigger_engine:
+            return
+
+        accepted_triggers = self.trigger_engine.accept_external_triggers([trigger])
+        for accepted_trigger in accepted_triggers:
+            await self._process_trigger(accepted_trigger, context)
 
 
 # ── Entry points ─────────────────────────────────────────────────────

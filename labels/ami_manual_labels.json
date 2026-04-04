@@ -1,0 +1,329 @@
+{
+  "updated_at": "2026-04-04T11:06:03.076919+00:00",
+  "labels": [
+    {
+      "source": "ami_manual_labeler",
+      "meeting_id": "EN2001a",
+      "example_id": "EN2001a_0000",
+      "window_index": 0,
+      "human_label": "should_trigger",
+      "should_trigger": true,
+      "trigger_type": "collaboration_opportunity",
+      "model_suggestion": {
+        "human_label": "should_trigger",
+        "trigger_type": "collaboration_opportunity",
+        "confidence": 0.75,
+        "reason": "Current conversation may answer the earlier open question: \"Does anyone want to see uh Steve's feedback from the specification?\"",
+        "source": "trigger_engine_replay",
+        "candidate_trigger_types": [
+          "collaboration_opportunity"
+        ]
+      },
+      "topic": null,
+      "start_time": 3.168,
+      "end_time": 20.816,
+      "weak_signals": {
+        "speaker_count": 3,
+        "speakers": [
+          "A",
+          "D",
+          "E"
+        ],
+        "dialogue_act_counts": {},
+        "adjacency_counts": {},
+        "understanding_signal_count": 0
+      },
+      "transcript_window": [
+        {
+          "speaker": "E",
+          "start_time": 3.168,
+          "end_time": 3.968,
+          "text": "'Kay.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 5.463,
+          "end_time": 6.103,
+          "text": "Gosh.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "A",
+          "start_time": 5.496,
+          "end_time": 6.07,
+          "text": "Okay.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 10.454,
+          "end_time": 10.953,
+          "text": "'Kay.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "A",
+          "start_time": 11.04,
+          "end_time": 15.632,
+          "text": "Does anyone want to see uh Steve's feedback from the specification?",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 16.736,
+          "end_time": 18.146,
+          "text": "Is there much more in it than he d",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "D",
+          "start_time": 16.98,
+          "end_time": 19.758,
+          "text": "I I dry-read it the last time..",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "A",
+          "start_time": 18.883,
+          "end_time": 19.373,
+          "text": "Right.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 18.985,
+          "end_time": 20.816,
+          "text": "Is there much more in it than he said yesterday?",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        }
+      ],
+      "notes": "",
+      "created_at": "2026-04-04T10:59:42.661381+00:00",
+      "updated_at": "2026-04-04T10:59:42.661381+00:00"
+    },
+    {
+      "source": "ami_manual_labeler",
+      "meeting_id": "EN2001a",
+      "example_id": "EN2001a_0002",
+      "window_index": 2,
+      "human_label": "should_trigger",
+      "should_trigger": true,
+      "trigger_type": "collaboration_opportunity",
+      "model_suggestion": {
+        "human_label": "should_trigger",
+        "trigger_type": "collaboration_opportunity",
+        "confidence": 0.75,
+        "reason": "Current conversation may answer the earlier open question: \"Is there much more in it than he said yesterday?\"",
+        "source": "trigger_engine_replay",
+        "candidate_trigger_types": [
+          "collaboration_opportunity"
+        ]
+      },
+      "topic": null,
+      "start_time": 16.98,
+      "end_time": 27.472,
+      "weak_signals": {
+        "speaker_count": 3,
+        "speakers": [
+          "A",
+          "D",
+          "E"
+        ],
+        "dialogue_act_counts": {},
+        "adjacency_counts": {},
+        "understanding_signal_count": 0
+      },
+      "transcript_window": [
+        {
+          "speaker": "D",
+          "start_time": 16.98,
+          "end_time": 19.758,
+          "text": "I I dry-read it the last time..",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "A",
+          "start_time": 18.883,
+          "end_time": 19.373,
+          "text": "Right.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 18.985,
+          "end_time": 20.816,
+          "text": "Is there much more in it than he said yesterday?",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "D",
+          "start_time": 20.944,
+          "end_time": 21.391,
+          "text": "[cough]",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 22.928,
+          "end_time": 23.312,
+          "text": "Mm.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 25.001,
+          "end_time": 27.472,
+          "text": "Hmm. Hmm?",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        }
+      ],
+      "notes": "",
+      "created_at": "2026-04-04T11:00:44.423853+00:00",
+      "updated_at": "2026-04-04T11:00:44.423853+00:00"
+    },
+    {
+      "source": "ami_manual_labeler",
+      "meeting_id": "EN2001a",
+      "example_id": "EN2001a_0003",
+      "window_index": 3,
+      "human_label": "should_trigger",
+      "should_trigger": true,
+      "trigger_type": "collaboration_opportunity",
+      "model_suggestion": {
+        "human_label": "should_trigger",
+        "trigger_type": "topic_drift",
+        "confidence": 0.8,
+        "reason": "Conversation has shifted away from the active meeting topic toward and, week, duplication",
+        "source": "trigger_engine_replay",
+        "candidate_trigger_types": [
+          "topic_drift"
+        ]
+      },
+      "topic": null,
+      "start_time": 20.944,
+      "end_time": 47.618,
+      "weak_signals": {
+        "speaker_count": 3,
+        "speakers": [
+          "A",
+          "D",
+          "E"
+        ],
+        "dialogue_act_counts": {},
+        "adjacency_counts": {},
+        "understanding_signal_count": 0
+      },
+      "transcript_window": [
+        {
+          "speaker": "D",
+          "start_time": 20.944,
+          "end_time": 21.391,
+          "text": "[cough]",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 22.928,
+          "end_time": 23.312,
+          "text": "Mm.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "E",
+          "start_time": 25.001,
+          "end_time": 27.472,
+          "text": "Hmm. Hmm?",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "A",
+          "start_time": 28.033,
+          "end_time": 40.152,
+          "text": "Like duplication of effort and stuff, and um yeah, he was saying that we should maybe uh think about having a prototype for week six, which is next week. Yeah.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "D",
+          "start_time": 38.661,
+          "end_time": 39.467,
+          "text": "Next week.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        },
+        {
+          "speaker": "A",
+          "start_time": 42.224,
+          "end_time": 47.618,
+          "text": "So we should probably prioritize our packages.",
+          "dialogue_acts": [],
+          "adjacency_types": [],
+          "addressee": null,
+          "topic": null
+        }
+      ],
+      "notes": "",
+      "created_at": "2026-04-04T11:06:03.076883+00:00",
+      "updated_at": "2026-04-04T11:06:03.076883+00:00"
+    }
+  ]
+}

@@ -74,7 +74,11 @@ class TriggerEngine:
         
         # Conversation intelligence (Tier-1 local scorer)
         self._intelligence = ConversationIntelligence()
-        self._fast_trigger_model = FastTriggerModel()
+        self._fast_trigger_model = FastTriggerModel(
+            artifact_path=config.trigger.model_artifact_path,
+            enable_training_log=config.trigger.enable_model_logging,
+            training_log_path=config.trigger.model_log_path,
+        )
         
         # Bot name for command detection
         self.bot_name = config.bot.name.lower()
@@ -276,16 +280,37 @@ class TriggerEngine:
                 triggers.append(signal_trigger)
 
         # 8. Fast local trigger model (safe fallback when rule layers found nothing)
-        if not triggers:
+        rule_based_trigger_types = [trigger.type for trigger in triggers]
+        fast_model_predictions = self._fast_trigger_model.score_predictions(
+            context=context,
+            new_chunks=new_chunks,
+        )
+        if fast_model_predictions and not triggers:
             triggers.extend(
-                self._fast_trigger_model.predict_triggers(
-                    context=context,
-                    new_chunks=new_chunks,
-                )
+                prediction.to_trigger()
+                for prediction in fast_model_predictions
+                if prediction.accepted
             )
 
         # Filter out triggers on cooldown
         triggers = self._filter_cooldowns(triggers)
+
+        if fast_model_predictions:
+            accepted_prediction_keys = {
+                prediction.key
+                for prediction in fast_model_predictions
+                if any(
+                    trigger.type == prediction.trigger_type
+                    and trigger.reason == prediction.reason
+                    for trigger in triggers
+                )
+            }
+            self._fast_trigger_model.log_predictions(
+                context=context,
+                predictions=fast_model_predictions,
+                rule_based_trigger_types=rule_based_trigger_types,
+                accepted_prediction_keys=accepted_prediction_keys,
+            )
         
         # Update cooldown timestamps
         for trigger in triggers:
@@ -1241,6 +1266,18 @@ class TriggerEngine:
             return None
 
         return (trigger.type, normalized)
+
+    def accept_external_triggers(self, triggers: List[Trigger]) -> List[Trigger]:
+        """Apply standard cooldown and dedupe rules to externally produced triggers."""
+        if not triggers:
+            return []
+
+        accepted = self._filter_cooldowns(triggers)
+        for trigger in accepted:
+            self._last_trigger_by_type[trigger.type] = datetime.now()
+            self._recent_triggers.append(trigger)
+
+        return accepted
     
     async def _check_loop(self):
         """Background loop that periodically checks for triggers."""

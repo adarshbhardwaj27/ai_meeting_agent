@@ -7,6 +7,7 @@ Includes:
 - End-to-end simulation tests
 """
 
+import json
 import pytest
 import asyncio
 from datetime import datetime, timedelta
@@ -177,6 +178,75 @@ class TestContextEngine:
         assert calls
         assert engine.context.historical_summary.startswith("Summary:")
         assert "Budget constraints" in engine.context.historical_summary
+
+    @pytest.mark.asyncio
+    async def test_compress_to_summary_emits_summary_trigger_when_audit_finds_one(self):
+        """Summary compaction should emit a trigger when the audit flags a factual issue."""
+        emitted = []
+
+        async def summarize(existing_summary, chunks):
+            return (
+                "Summary: The team discussed a launch metric discrepancy.\n"
+                "Decisions: None\n"
+                "Open Questions: None\n"
+                "Risks: None\n"
+                "Action Items: None"
+            )
+
+        async def audit(existing_summary, chunks):
+            trigger = Trigger.create_proactive(
+                TriggerType.FACTUAL_INCONSISTENCY,
+                0.84,
+                "The rollout figure conflicts with earlier context.",
+            )
+            trigger.signal_evidence_a = "Earlier summary: launch target was 5%"
+            trigger.signal_evidence_b = "New transcript: launch target is 50%"
+            trigger.relevant_transcript = "We said 5 percent earlier, not 50 percent."
+            return trigger
+
+        async def on_summary_trigger(trigger, context):
+            emitted.append((trigger, context.historical_summary))
+
+        engine = ContextEngine(
+            meeting_id="summary_trigger_test",
+            platform="test",
+            summary_update_threshold=20,
+            context_summarizer=summarize,
+            summary_trigger_auditor=audit,
+            on_summary_trigger=on_summary_trigger,
+        )
+        engine.context.historical_summary = "Summary: Earlier target was 5 percent."
+
+        chunks = [
+            TranscriptChunk(
+                text="The launch target is definitely 50 percent now.",
+                timestamp=datetime.now() - timedelta(minutes=20),
+                speaker="John",
+            ),
+            TranscriptChunk(
+                text="I thought we said 5 percent earlier.",
+                timestamp=datetime.now() - timedelta(minutes=19),
+                speaker="Sarah",
+            ),
+            TranscriptChunk(
+                text="Let's capture the discrepancy in the summary.",
+                timestamp=datetime.now() - timedelta(minutes=18),
+                speaker="Mike",
+            ),
+            TranscriptChunk(
+                text="We can revisit the real number after this call.",
+                timestamp=datetime.now() - timedelta(minutes=17),
+                speaker="John",
+            ),
+        ]
+
+        await engine._compress_to_summary(chunks)
+
+        assert len(emitted) == 1
+        assert emitted[0][0].type == TriggerType.FACTUAL_INCONSISTENCY
+        assert emitted[0][0].signal_evidence_a == "Earlier summary: launch target was 5%"
+        assert emitted[0][0].signal_evidence_b == "New transcript: launch target is 50%"
+        assert emitted[0][1].startswith("Summary: The team discussed a launch metric discrepancy.")
     
     def test_get_recent_text(self, context_engine):
         """Test getting recent transcript text."""
@@ -1701,6 +1771,89 @@ class TestVoiceAddress:
 
         assert [t for t in triggers if t.type == TriggerType.REPEATED_CONFUSION] == []
 
+    def test_fast_model_loads_profile_from_artifact(self, tmp_path):
+        """The fast trigger model should load weights from an artifact file when provided."""
+        artifact_path = tmp_path / "trigger_model.json"
+        artifact_path.write_text(
+            json.dumps(
+                {
+                    "model_name": "unit-test-model",
+                    "model_version": "test-v1",
+                    "profiles": [
+                        {
+                            "trigger_type": "repeated_confusion",
+                            "bias": -1.0,
+                            "threshold": 0.55,
+                            "weights": {
+                                "strong_confusion_ratio": 1.5,
+                                "soft_uncertainty_ratio": 0.8
+                            },
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        model = FastTriggerModel(artifact_path=str(artifact_path))
+
+        assert model.model_name == "unit-test-model"
+        assert model.model_version == "test-v1"
+        assert model._profiles[TriggerType.REPEATED_CONFUSION].threshold == 0.55
+        assert model._profiles[TriggerType.REPEATED_CONFUSION].weights["strong_confusion_ratio"] == 1.5
+
+    def test_fast_model_logs_prediction_outcomes(self, tmp_path):
+        """Fast-model predictions should be written as JSONL records for offline training."""
+        log_path = tmp_path / "trigger_model_events.jsonl"
+        model = FastTriggerModel(
+            enable_training_log=True,
+            training_log_path=str(log_path),
+        )
+
+        context = MeetingContext(
+            meeting_id="training_log_test",
+            meeting_started_at=datetime.now() - timedelta(minutes=5),
+            platform="test",
+        )
+        context.participants.update({"Adarsh", "Abhishek"})
+        context.recent_transcript.extend([
+            TranscriptChunk(
+                text="The API is returning 500 but logs are empty",
+                timestamp=datetime.now() - timedelta(seconds=3),
+                speaker="Adarsh",
+            ),
+            TranscriptChunk(
+                text="That is weird, I am confused and we are missing something basic",
+                timestamp=datetime.now() - timedelta(seconds=2),
+                speaker="Abhishek",
+            ),
+            TranscriptChunk(
+                text="Same here, nothing is making sense right now",
+                timestamp=datetime.now() - timedelta(seconds=1),
+                speaker="Adarsh",
+            ),
+        ])
+
+        predictions = model.score_predictions(context=context)
+        assert predictions
+
+        model.log_predictions(
+            context=context,
+            predictions=predictions,
+            rule_based_trigger_types=[],
+            accepted_prediction_keys={prediction.key for prediction in predictions if prediction.accepted},
+        )
+
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        assert lines
+
+        record = json.loads(lines[0])
+        assert record["meeting_id"] == "training_log_test"
+        assert record["trigger_type"] == "repeated_confusion"
+        assert record["outcome"] == "accepted"
+        assert record["model_name"] == model.model_name
+        assert "soft_uncertainty_ratio" in record["features"]
+
 
 # =============================================================================
 # Integration Tests
@@ -2145,6 +2298,42 @@ class TestLLMServiceFallback:
 
         await service.summarize_context("", chunks)
 
+        assert service._call_llm.await_args.kwargs["model_override"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_summary_factual_audit_promotes_llm_hit_to_trigger(self):
+        """Summary-time audit should return a factual inconsistency trigger when the LLM says yes."""
+        service = LLMService()
+        service._client = object()
+        service._summary_model = "gpt-4o-mini"
+        service._call_llm = AsyncMock(
+            return_value=(
+                "Trigger: yes\n"
+                "Confidence: 0.88\n"
+                "Reason: The arithmetic in the new statement is plainly incorrect.\n"
+                "Evidence A: [Priya] One plus one equals three.\n"
+                "Evidence B: None\n"
+                "Relevant Transcript: [Priya] One plus one equals three."
+            )
+        )
+
+        chunks = [
+            TranscriptChunk(
+                text="One plus one equals three.",
+                timestamp=datetime.now() - timedelta(minutes=5),
+                speaker="Priya",
+            )
+        ]
+
+        trigger = await service.audit_summary_for_factual_errors("", chunks)
+
+        assert trigger is not None
+        assert trigger.type == TriggerType.FACTUAL_INCONSISTENCY
+        assert trigger.confidence == pytest.approx(0.88)
+        assert trigger.reason == "The arithmetic in the new statement is plainly incorrect."
+        assert trigger.signal_evidence_a == "[Priya] One plus one equals three."
+        assert trigger.signal_evidence_b is None
+        assert trigger.relevant_transcript == "[Priya] One plus one equals three."
         assert service._call_llm.await_args.kwargs["model_override"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio

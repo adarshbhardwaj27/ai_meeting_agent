@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Past Session Trigger Review UI</title>
+  <style>
+    :root {
+      --ink: #1d2935;
+      --muted: #5f6c77;
+      --bg: #f3efe8;
+      --panel: rgba(255, 251, 246, 0.94);
+      --line: #d8ccb8;
+      --accent: #0f766e;
+      --accent-soft: #d9efeb;
+      --warn: #b7791f;
+      --danger: #b5473e;
+      --success: #236a4b;
+      --shadow: 0 10px 36px rgba(29, 41, 53, 0.08);
+      --radius: 18px;
+      --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--ink);
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.1), transparent 28%),
+        radial-gradient(circle at top right, rgba(183, 121, 31, 0.14), transparent 24%),
+        linear-gradient(180deg, #f8f3eb 0%, #f1ebe1 100%);
+    }
+
+    .shell {
+      width: min(1340px, 100% - 32px);
+      margin: 20px auto 40px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .toolbar {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .toolbar-grid {
+      display: grid;
+      grid-template-columns: 2fr auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .toolbar-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font: inherit;
+      color: var(--ink);
+      background: white;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 11px 16px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-secondary { background: #e7ddd0; color: var(--ink); }
+    .btn-soft { background: var(--accent-soft); color: var(--accent); }
+
+    .meta {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 16px;
+    }
+
+    .meta-block h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .badges, .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .badge, .pill {
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .badge { background: #eee4d5; color: var(--ink); }
+    .pill { background: var(--accent-soft); color: var(--accent); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.45fr 0.95fr;
+      gap: 18px;
+    }
+
+    .transcript {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+      max-height: 72vh;
+      overflow: auto;
+    }
+
+    .turn {
+      padding: 14px 14px 12px;
+      background: white;
+      border: 1px solid #e6dbc9;
+      border-radius: 16px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .turn.trigger-anchor {
+      border-color: #0f766e;
+      background: #eef8f6;
+      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.12);
+    }
+
+    .turn-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .speaker {
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .turn-badge {
+      justify-self: start;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: var(--accent);
+      color: white;
+    }
+
+    .time {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .turn-text {
+      white-space: pre-wrap;
+      line-height: 1.55;
+      font-size: 16px;
+    }
+
+    .sidebar {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .radio-group {
+      display: grid;
+      gap: 10px;
+    }
+
+    .choice {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: white;
+      border: 1px solid #e6dbc9;
+    }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #fff3d9;
+      color: #6a4d17;
+      font-weight: 600;
+      white-space: pre-wrap;
+    }
+
+    .status.success { background: #dff4e9; color: var(--success); }
+    .status.error { background: #f8dfdb; color: var(--danger); }
+
+    .callout {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: white;
+      border: 1px solid #e6dbc9;
+      display: grid;
+      gap: 8px;
+    }
+
+    .callout strong {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--warn);
+    }
+
+    .empty {
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    @media (max-width: 980px) {
+      .toolbar-grid, .meta, .layout {
+        grid-template-columns: 1fr;
+      }
+      .transcript { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="card toolbar">
+      <div class="toolbar-grid">
+        <label>
+          Logged Session
+          <select id="sessionSelect"></select>
+        </label>
+        <div class="toolbar-row">
+          <button id="loadSession" class="btn-primary">Load Past Session</button>
+          <button id="exportCsv" class="btn-secondary">Open CSV</button>
+          <button id="exportJsonl" class="btn-secondary">Open JSONL</button>
+        </div>
+      </div>
+      <div class="toolbar-row">
+        <button id="prevReview" class="btn-secondary">Previous</button>
+        <button id="nextReview" class="btn-secondary">Next</button>
+        <button id="nextUnreviewed" class="btn-soft">Next Unreviewed</button>
+        <span id="progressText" class="subtle"></span>
+      </div>
+    </section>
+
+    <section class="card meta">
+      <div class="meta-block">
+        <h1 id="reviewTitle">Load a past session</h1>
+        <div id="reviewSubtitle" class="subtle">Review trigger events from completed app sessions, correct them, and save the corrected dataset for training.</div>
+        <div id="sessionBadges" class="badges"></div>
+      </div>
+      <div class="meta-block">
+        <div class="subtle">Observed Trigger From Past Session</div>
+        <div id="predictionBox" class="status">No trigger loaded yet.</div>
+        <div class="subtle">Response</div>
+        <div id="responseBox" class="status">No bot response recorded.</div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="card transcript" id="transcriptPanel">
+        <div class="empty">Choose a completed session to start review.</div>
+      </div>
+
+      <div class="sidebar">
+        <section class="card panel">
+          <div class="subtle">Correction</div>
+          <div class="radio-group">
+            <label class="choice"><input type="radio" name="labelKind" value="should_trigger">Trigger was correct or should still trigger</label>
+            <label class="choice"><input type="radio" name="labelKind" value="should_not_trigger">Should not have triggered</label>
+            <label class="choice"><input type="radio" name="labelKind" value="skip">Skip / Unsure</label>
+          </div>
+          <label>
+            Correct Trigger Type
+            <select id="triggerType">
+              <option value="">Select trigger type</option>
+              <option value="voice_address">voice_address</option>
+              <option value="explicit_command">explicit_command</option>
+              <option value="repeated_confusion">repeated_confusion</option>
+              <option value="memory_gap">memory_gap</option>
+              <option value="contradiction">contradiction</option>
+              <option value="factual_inconsistency">factual_inconsistency</option>
+              <option value="collaboration_opportunity">collaboration_opportunity</option>
+              <option value="decision_conflict">decision_conflict</option>
+              <option value="topic_drift">topic_drift</option>
+              <option value="circular_discussion">circular_discussion</option>
+            </select>
+          </label>
+          <label>
+            Notes
+            <textarea id="notesBox" placeholder="Why was this trigger right, wrong, or incomplete?"></textarea>
+          </label>
+          <button id="saveReview" class="btn-primary">Save Review</button>
+          <div id="statusBox" class="status">No correction saved yet for this trigger.</div>
+        </section>
+
+        <section class="card panel">
+          <div class="subtle">Relevant Excerpt</div>
+          <div id="excerptBox" class="callout"><strong>Model excerpt</strong><div>No excerpt loaded.</div></div>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      sessions: [],
+      currentMeetingId: null,
+      sessionData: null,
+      currentIndex: 0,
+    };
+
+    const sessionSelect = document.getElementById('sessionSelect');
+    const transcriptPanel = document.getElementById('transcriptPanel');
+    const progressText = document.getElementById('progressText');
+    const reviewTitle = document.getElementById('reviewTitle');
+    const reviewSubtitle = document.getElementById('reviewSubtitle');
+    const sessionBadges = document.getElementById('sessionBadges');
+    const predictionBox = document.getElementById('predictionBox');
+    const responseBox = document.getElementById('responseBox');
+    const triggerType = document.getElementById('triggerType');
+    const notesBox = document.getElementById('notesBox');
+    const statusBox = document.getElementById('statusBox');
+    const excerptBox = document.getElementById('excerptBox');
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Request failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function currentReview() {
+      return state.sessionData?.reviews?.[state.currentIndex] || null;
+    }
+
+    function currentSavedReview() {
+      const review = currentReview();
+      if (!review || !state.sessionData?.labels) {
+        return null;
+      }
+      return state.sessionData.labels[review.example_id] || null;
+    }
+
+    function setStatus(message, kind = '') {
+      statusBox.textContent = message;
+      statusBox.className = `status${kind ? ` ${kind}` : ''}`;
+    }
+
+    function updateProgress() {
+      if (!state.sessionData) {
+        progressText.textContent = '';
+        return;
+      }
+      const total = state.sessionData.reviews.length;
+      const labeled = state.sessionData.labeled_count;
+      if (!total) {
+        progressText.textContent = 'No trigger events found in this session.';
+        return;
+      }
+      progressText.textContent = `Trigger ${state.currentIndex + 1} of ${total} • Reviewed ${labeled}/${total}`;
+    }
+
+    function renderTranscript(review) {
+      if (!review || !review.transcript_window?.length) {
+        transcriptPanel.innerHTML = '<div class="empty">No transcript context captured for this trigger.</div>';
+        return;
+      }
+      transcriptPanel.innerHTML = review.transcript_window.map((turn, index) => {
+        const isAnchor = Number.isInteger(review.trigger_anchor_index) && index === review.trigger_anchor_index;
+        return `
+        <article class="turn${isAnchor ? ' trigger-anchor' : ''}">
+          <div class="turn-head">
+            <div class="speaker">${escapeHtml(turn.speaker)}</div>
+            <div class="time">${escapeHtml(turn.wall_clock || `${turn.start_time.toFixed(1)}s`)}</div>
+          </div>
+          ${isAnchor ? '<div class="turn-badge">Triggered Here</div>' : ''}
+          <div class="turn-text">${escapeHtml(turn.text)}</div>
+        </article>
+      `;
+      }).join('');
+    }
+
+    function applyReviewToForm(review, savedReview) {
+      const radios = document.querySelectorAll('input[name="labelKind"]');
+      radios.forEach((radio) => { radio.checked = false; });
+
+      if (savedReview) {
+        const selected = document.querySelector(`input[name="labelKind"][value="${savedReview.human_label}"]`);
+        if (selected) {
+          selected.checked = true;
+        }
+        triggerType.value = savedReview.trigger_type === 'none' ? '' : (savedReview.trigger_type || '');
+        notesBox.value = savedReview.notes || '';
+        setStatus('Saved correction loaded for this trigger.', 'success');
+        return;
+      }
+
+      const predictedRadio = document.querySelector('input[name="labelKind"][value="should_trigger"]');
+      if (predictedRadio) {
+        predictedRadio.checked = true;
+      }
+      triggerType.value = review.weak_signals.predicted_trigger_type || '';
+      notesBox.value = '';
+      setStatus('Prefilled from the observed live trigger. Save or correct it.', '');
+    }
+
+    function renderCurrent() {
+      const review = currentReview();
+      if (!review) {
+        reviewTitle.textContent = 'No trigger selected';
+        reviewSubtitle.textContent = 'Choose a completed session with trigger events.';
+        sessionBadges.innerHTML = '';
+        predictionBox.textContent = 'No trigger loaded yet.';
+        responseBox.textContent = 'No bot response recorded.';
+        excerptBox.innerHTML = '<strong>Model excerpt</strong><div>No excerpt loaded.</div>';
+        renderTranscript(null);
+        updateProgress();
+        return;
+      }
+
+      const savedReview = currentSavedReview();
+      reviewTitle.textContent = `${review.meeting_id} • Trigger ${review.window_index + 1}`;
+      reviewSubtitle.textContent = `${review.start_time.toFixed(1)}s to ${review.end_time.toFixed(1)}s • ${review.transcript_window.length} transcript turns before trigger`;
+      sessionBadges.innerHTML = `
+        <span class="badge">Predicted: ${review.weak_signals.predicted_trigger_type}</span>
+        <span class="badge">Confidence: ${(Number(review.weak_signals.predicted_confidence || 0) * 100).toFixed(0)}%</span>
+        <span class="badge">Event: ${new Date(review.event_time).toLocaleString()}</span>
+        ${review.trigger_anchor_time ? `<span class="badge">Triggered On: ${escapeHtml(review.trigger_anchor_time)}</span>` : ''}
+      `;
+      predictionBox.textContent = `${review.weak_signals.predicted_trigger_type} • ${(Number(review.weak_signals.predicted_confidence || 0) * 100).toFixed(0)}%\n${review.weak_signals.predicted_reason || 'No reason recorded.'}`;
+      responseBox.textContent = review.weak_signals.response_text || 'No bot response recorded.';
+      excerptBox.innerHTML = `<strong>Model excerpt</strong><div>${escapeHtml(review.weak_signals.relevant_text || 'No relevant excerpt recorded.')}</div>${review.trigger_anchor_text ? `<div><strong>Matched line</strong></div><div>${escapeHtml(review.trigger_anchor_text)}</div>` : ''}`;
+      renderTranscript(review);
+      applyReviewToForm(review, savedReview);
+      updateProgress();
+    }
+
+    async function loadSessions() {
+      const payload = await fetchJson('/api/sessions');
+      state.sessions = payload.sessions || [];
+      sessionSelect.innerHTML = '';
+
+      if (!state.sessions.length) {
+        sessionSelect.innerHTML = '<option value="">No logged sessions found</option>';
+        return;
+      }
+
+      state.sessions.forEach((session) => {
+        const option = document.createElement('option');
+        option.value = session.meeting_id;
+        option.textContent = `${session.meeting_id} • ${session.trigger_count} triggers • ${session.source}`;
+        sessionSelect.appendChild(option);
+      });
+      state.currentMeetingId = state.sessions[0].meeting_id;
+      sessionSelect.value = state.currentMeetingId;
+    }
+
+    async function loadCurrentSession() {
+      const meetingId = sessionSelect.value;
+      if (!meetingId) {
+        return;
+      }
+      state.currentMeetingId = meetingId;
+      state.sessionData = await fetchJson(`/api/session?meeting_id=${encodeURIComponent(meetingId)}`);
+      state.currentIndex = 0;
+      renderCurrent();
+    }
+
+    async function saveReview() {
+      const review = currentReview();
+      if (!review) {
+        return;
+      }
+      const selected = document.querySelector('input[name="labelKind"]:checked');
+      if (!selected) {
+        setStatus('Choose a correction label before saving.', 'error');
+        return;
+      }
+
+      const payload = {
+        meeting_id: review.meeting_id,
+        example_id: review.example_id,
+        trigger_index: review.window_index,
+        event_time: review.event_time,
+        human_label: selected.value,
+        trigger_type: triggerType.value,
+        predicted_trigger_type: review.weak_signals.predicted_trigger_type,
+        predicted_confidence: review.weak_signals.predicted_confidence,
+        predicted_reason: review.weak_signals.predicted_reason,
+        relevant_text: review.weak_signals.relevant_text,
+        response_text: review.weak_signals.response_text,
+        transcript_window: review.transcript_window,
+        notes: notesBox.value,
+      };
+
+      try {
+        const result = await fetchJson('/api/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        state.sessionData.labels[review.example_id] = result.record;
+        state.sessionData.labeled_count = Object.values(state.sessionData.labels).filter(Boolean).length;
+        setStatus('Review saved.', 'success');
+        updateProgress();
+      } catch (error) {
+        setStatus(error.message, 'error');
+      }
+    }
+
+    function move(delta) {
+      if (!state.sessionData?.reviews?.length) {
+        return;
+      }
+      const nextIndex = state.currentIndex + delta;
+      if (nextIndex < 0 || nextIndex >= state.sessionData.reviews.length) {
+        return;
+      }
+      state.currentIndex = nextIndex;
+      renderCurrent();
+    }
+
+    function moveToNextUnreviewed() {
+      if (!state.sessionData?.reviews?.length) {
+        return;
+      }
+      const reviews = state.sessionData.reviews;
+      for (let index = state.currentIndex + 1; index < reviews.length; index += 1) {
+        const review = reviews[index];
+        if (!state.sessionData.labels[review.example_id]) {
+          state.currentIndex = index;
+          renderCurrent();
+          return;
+        }
+      }
+      setStatus('No later unreviewed triggers in this session.', '');
+    }
+
+    document.getElementById('loadSession').addEventListener('click', loadCurrentSession);
+    document.getElementById('prevReview').addEventListener('click', () => move(-1));
+    document.getElementById('nextReview').addEventListener('click', () => move(1));
+    document.getElementById('nextUnreviewed').addEventListener('click', moveToNextUnreviewed);
+    document.getElementById('saveReview').addEventListener('click', saveReview);
+    document.getElementById('exportCsv').addEventListener('click', () => window.open('/api/export/csv', '_blank'));
+    document.getElementById('exportJsonl').addEventListener('click', () => window.open('/api/export/jsonl', '_blank'));
+
+    loadSessions().then(() => {
+      if (state.sessions.length) {
+        loadCurrentSession();
+      }
+    }).catch((error) => {
+      setStatus(error.message, 'error');
+    });
+  </script>
+</body>
+</html>

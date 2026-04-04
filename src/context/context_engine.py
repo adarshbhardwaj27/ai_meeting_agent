@@ -12,13 +12,14 @@ import asyncio
 import copy
 from collections import deque
 from datetime import datetime, timedelta
+import inspect
 from typing import List, Optional, Callable, Deque, Awaitable
 import re
 import structlog
 
 from src.config import config
 from src.context.models import (
-    MeetingContext, TranscriptChunk, Topic, Concern, Decision,
+    MeetingContext, TranscriptChunk, Topic, Concern, Decision, Trigger,
     ConcernSeverity, DecisionStatus, Event, EventType
 )
 
@@ -45,6 +46,10 @@ class ContextEngine:
         context_summarizer: Optional[
             Callable[[str, List[TranscriptChunk]], Awaitable[Optional[str]]]
         ] = None,
+        summary_trigger_auditor: Optional[
+            Callable[[str, List[TranscriptChunk]], Awaitable[Optional[Trigger]]]
+        ] = None,
+        on_summary_trigger: Optional[Callable[[Trigger, MeetingContext], object]] = None,
     ):
         self.window_minutes = window_minutes or config.context.window_minutes
         self.update_interval = update_interval or config.context.update_interval_seconds
@@ -53,6 +58,8 @@ class ContextEngine:
         )
         self.on_context_updated = on_context_updated
         self._context_summarizer = context_summarizer
+        self._summary_trigger_auditor = summary_trigger_auditor
+        self._on_summary_trigger = on_summary_trigger
         self._last_llm_summary_at: Optional[datetime] = None
         self._llm_summary_cooldown_seconds = 60
         
@@ -509,6 +516,7 @@ class ContextEngine:
         if not deduped_chunks:
             return
 
+        previous_summary = self.context.historical_summary
         llm_summary = await self._summarize_with_llm(deduped_chunks)
         if llm_summary:
             self.context.historical_summary = llm_summary
@@ -519,6 +527,7 @@ class ContextEngine:
                 summary_length=len(self.context.historical_summary),
                 mode="llm",
             )
+            await self._emit_summary_trigger(previous_summary, deduped_chunks)
             return
 
         if len(deduped_chunks) <= 6:
@@ -586,6 +595,34 @@ class ContextEngine:
         except Exception as e:
             logger.warning("context_llm_summary_failed", error=str(e))
             return None
+
+    async def _emit_summary_trigger(
+        self,
+        existing_summary: str,
+        chunks: List[TranscriptChunk],
+    ) -> None:
+        """Emit any trigger discovered during summary compaction."""
+        if not self._summary_trigger_auditor or not self._on_summary_trigger:
+            return
+
+        try:
+            trigger = await self._summary_trigger_auditor(existing_summary, chunks)
+        except Exception as e:
+            logger.warning("summary_trigger_audit_failed", error=str(e))
+            return
+
+        if not trigger:
+            return
+
+        logger.info(
+            "summary_trigger_detected",
+            trigger_type=trigger.type.value,
+            confidence=round(trigger.confidence, 2),
+        )
+
+        callback_result = self._on_summary_trigger(trigger, copy.deepcopy(self.context))
+        if inspect.isawaitable(callback_result):
+            await callback_result
 
     @staticmethod
     def _estimate_summary_tokens(text_or_chunks) -> int:

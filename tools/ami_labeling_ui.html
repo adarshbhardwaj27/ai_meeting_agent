@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AMI Labeling UI</title>
+  <style>
+    :root {
+      --ink: #1f2933;
+      --muted: #52606d;
+      --bg: #f5efe6;
+      --panel: #fffaf4;
+      --line: #dccfbd;
+      --accent: #007f73;
+      --accent-soft: #d8f0ed;
+      --warm: #f3b562;
+      --danger: #b5473e;
+      --success: #236a4b;
+      --shadow: 0 10px 35px rgba(31, 41, 51, 0.08);
+      --radius: 18px;
+      --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background:
+        radial-gradient(circle at top left, rgba(0, 127, 115, 0.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(243, 181, 98, 0.18), transparent 25%),
+        linear-gradient(180deg, #f8f1e7 0%, #f2ebe1 100%);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+
+    .shell {
+      width: min(1320px, 100% - 32px);
+      margin: 20px auto 40px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .card {
+      background: rgba(255, 250, 244, 0.94);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .toolbar {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .toolbar-grid {
+      display: grid;
+      grid-template-columns: 2fr 110px 110px 1fr;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .toolbar-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    select, input[type="number"], textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font: inherit;
+      color: var(--ink);
+      background: white;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 11px 16px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-secondary { background: #e8dfd3; color: var(--ink); }
+    .btn-soft { background: var(--accent-soft); color: var(--accent); }
+
+    .meta {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 16px;
+    }
+
+    .meta-block h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .badges, .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .badge, .pill {
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .badge { background: #eee5d8; color: var(--ink); }
+    .pill { background: var(--accent-soft); color: var(--accent); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.5fr 0.9fr;
+      gap: 18px;
+    }
+
+    .transcript {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+      max-height: 72vh;
+      overflow: auto;
+    }
+
+    .turn {
+      padding: 14px 14px 12px;
+      background: white;
+      border: 1px solid #e6dbc9;
+      border-radius: 16px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .turn-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .speaker {
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .time {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .turn-text {
+      white-space: pre-wrap;
+      line-height: 1.55;
+      font-size: 16px;
+    }
+
+    .sidebar {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .radio-group {
+      display: grid;
+      gap: 10px;
+    }
+
+    .choice {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: white;
+      border: 1px solid #e6dbc9;
+    }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #fff3d9;
+      color: #6a4d17;
+      font-weight: 600;
+    }
+
+    .status.success {
+      background: #dff4e9;
+      color: var(--success);
+    }
+
+    .status.error {
+      background: #f8dfdb;
+      color: var(--danger);
+    }
+
+    .empty {
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    @media (max-width: 980px) {
+      .toolbar-grid, .meta, .layout {
+        grid-template-columns: 1fr;
+      }
+      .transcript { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="card toolbar">
+      <div class="toolbar-grid">
+        <label>
+          Meeting
+          <select id="meetingSelect"></select>
+        </label>
+        <label>
+          Window Size
+          <input id="windowSize" type="number" min="3" max="12" value="6">
+        </label>
+        <label>
+          Step
+          <input id="stepSize" type="number" min="1" max="8" value="3">
+        </label>
+        <div class="toolbar-row">
+          <button id="loadMeeting" class="btn-primary">Load Meeting</button>
+          <button id="exportCsv" class="btn-secondary">Open CSV</button>
+          <button id="exportJsonl" class="btn-secondary">Open JSONL</button>
+        </div>
+      </div>
+      <div class="toolbar-row">
+        <button id="prevWindow" class="btn-secondary">Previous</button>
+        <button id="nextWindow" class="btn-secondary">Next</button>
+        <button id="nextUnlabeled" class="btn-soft">Next Unlabeled</button>
+        <span id="progressText" class="subtle"></span>
+      </div>
+    </section>
+
+    <section class="card meta">
+      <div class="meta-block">
+        <h1 id="exampleTitle">Load a meeting</h1>
+        <div id="exampleSubtitle" class="subtle">The labeler reconstructs AMI segments into speaker windows and saves your labels to JSONL and CSV.</div>
+        <div id="topicBadges" class="badges"></div>
+      </div>
+      <div class="meta-block">
+        <div class="subtle">Model Prefill</div>
+        <div id="suggestionBox" class="status">Suggestion not loaded yet.</div>
+        <div class="subtle">Weak Signals</div>
+        <div id="weakSignals" class="pill-row"></div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="card transcript" id="transcriptPanel">
+        <div class="empty">Choose a meeting to start labeling.</div>
+      </div>
+
+      <div class="sidebar">
+        <section class="card panel">
+          <div class="subtle">Label</div>
+          <div class="radio-group">
+            <label class="choice"><input type="radio" name="labelKind" value="should_trigger">Should Trigger</label>
+            <label class="choice"><input type="radio" name="labelKind" value="should_not_trigger">Should Not Trigger</label>
+            <label class="choice"><input type="radio" name="labelKind" value="skip">Skip / Unsure</label>
+          </div>
+          <label>
+            Trigger Type
+            <select id="triggerType">
+              <option value="">Select trigger type</option>
+              <option value="repeated_confusion">repeated_confusion</option>
+              <option value="memory_gap">memory_gap</option>
+              <option value="contradiction">contradiction</option>
+              <option value="factual_inconsistency">factual_inconsistency</option>
+              <option value="collaboration_opportunity">collaboration_opportunity</option>
+              <option value="decision_conflict">decision_conflict</option>
+              <option value="topic_drift">topic_drift</option>
+              <option value="circular_discussion">circular_discussion</option>
+            </select>
+          </label>
+          <label>
+            Notes
+            <textarea id="notesBox" placeholder="Short note about why you chose this label"></textarea>
+          </label>
+          <button id="saveLabel" class="btn-primary">Save Label</button>
+          <div id="statusBox" class="status">No label saved yet for this window.</div>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      meetings: [],
+      currentMeetingId: null,
+      meetingData: null,
+      currentIndex: 0,
+      suggestions: {},
+    };
+
+    const meetingSelect = document.getElementById('meetingSelect');
+    const windowSize = document.getElementById('windowSize');
+    const stepSize = document.getElementById('stepSize');
+    const transcriptPanel = document.getElementById('transcriptPanel');
+    const progressText = document.getElementById('progressText');
+    const exampleTitle = document.getElementById('exampleTitle');
+    const exampleSubtitle = document.getElementById('exampleSubtitle');
+    const topicBadges = document.getElementById('topicBadges');
+    const suggestionBox = document.getElementById('suggestionBox');
+    const weakSignals = document.getElementById('weakSignals');
+    const triggerType = document.getElementById('triggerType');
+    const notesBox = document.getElementById('notesBox');
+    const statusBox = document.getElementById('statusBox');
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Request failed');
+      }
+      return response.json();
+    }
+
+    function labelInputs() {
+      return Array.from(document.querySelectorAll('input[name="labelKind"]'));
+    }
+
+    function selectedLabel() {
+      const checked = labelInputs().find((input) => input.checked);
+      return checked ? checked.value : null;
+    }
+
+    function setSelectedLabel(value) {
+      labelInputs().forEach((input) => {
+        input.checked = input.value === value;
+      });
+      syncTriggerSelectState();
+    }
+
+    function syncTriggerSelectState() {
+      const shouldTrigger = selectedLabel() === 'should_trigger';
+      triggerType.disabled = !shouldTrigger;
+      if (!shouldTrigger) {
+        triggerType.value = '';
+      }
+    }
+
+    function setStatus(message, kind = '') {
+      statusBox.textContent = message;
+      statusBox.className = `status ${kind}`.trim();
+    }
+
+    function setSuggestion(message, kind = '') {
+      suggestionBox.textContent = message;
+      suggestionBox.className = `status ${kind}`.trim();
+    }
+
+    function renderTranscript(windowRecord) {
+      if (!windowRecord) {
+        transcriptPanel.innerHTML = '<div class="empty">No window available.</div>';
+        return;
+      }
+
+      transcriptPanel.innerHTML = '';
+      for (const turn of windowRecord.transcript_window) {
+        const turnEl = document.createElement('article');
+        turnEl.className = 'turn';
+        const badges = [];
+        for (const act of (turn.dialogue_acts || [])) {
+          badges.push(`<span class="badge">${act}</span>`);
+        }
+        for (const adj of (turn.adjacency_types || [])) {
+          badges.push(`<span class="pill">${adj}</span>`);
+        }
+        if (turn.topic) {
+          badges.push(`<span class="badge">Topic: ${turn.topic}</span>`);
+        }
+        if (turn.addressee) {
+          badges.push(`<span class="badge">To: ${turn.addressee}</span>`);
+        }
+        turnEl.innerHTML = `
+          <div class="turn-head">
+            <div class="speaker">Speaker ${turn.speaker}</div>
+            <div class="time">${turn.start_time.toFixed(1)}s to ${turn.end_time.toFixed(1)}s</div>
+          </div>
+          <div class="turn-text">${escapeHtml(turn.text)}</div>
+          <div class="badges">${badges.join('')}</div>
+        `;
+        transcriptPanel.appendChild(turnEl);
+      }
+    }
+
+    function renderMeta(windowRecord) {
+      if (!windowRecord) {
+        exampleTitle.textContent = 'Load a meeting';
+        exampleSubtitle.textContent = 'The labeler reconstructs AMI segments into speaker windows and saves your labels to JSONL and CSV.';
+        topicBadges.innerHTML = '';
+        weakSignals.innerHTML = '';
+        return;
+      }
+
+      exampleTitle.textContent = `${windowRecord.meeting_id} • Window ${windowRecord.window_index + 1}`;
+      exampleSubtitle.textContent = `${windowRecord.start_time.toFixed(1)}s to ${windowRecord.end_time.toFixed(1)}s • ${windowRecord.transcript_window.length} turns`;
+      topicBadges.innerHTML = '';
+      if (windowRecord.topic) {
+        const topic = document.createElement('span');
+        topic.className = 'badge';
+        topic.textContent = `Topic: ${windowRecord.topic}`;
+        topicBadges.appendChild(topic);
+      }
+      const exampleId = document.createElement('span');
+      exampleId.className = 'badge';
+      exampleId.textContent = windowRecord.example_id;
+      topicBadges.appendChild(exampleId);
+
+      weakSignals.innerHTML = '';
+      const weak = windowRecord.weak_signals || {};
+      const chips = [
+        `Speakers: ${weak.speaker_count || 0}`,
+        `Understanding cues: ${weak.understanding_signal_count || 0}`,
+      ];
+      const dialogueActs = Object.entries(weak.dialogue_act_counts || {}).slice(0, 4);
+      for (const [name, count] of dialogueActs) {
+        chips.push(`${name}: ${count}`);
+      }
+      const adjacency = Object.entries(weak.adjacency_counts || {}).slice(0, 3);
+      for (const [name, count] of adjacency) {
+        chips.push(`${name}: ${count}`);
+      }
+      chips.forEach((text) => {
+        const chip = document.createElement('span');
+        chip.className = 'pill';
+        chip.textContent = text;
+        weakSignals.appendChild(chip);
+      });
+    }
+
+    function renderProgress() {
+      if (!state.meetingData) {
+        progressText.textContent = '';
+        return;
+      }
+      const { labeled_count, total_windows } = state.meetingData;
+      progressText.textContent = `${labeled_count}/${total_windows} labeled in ${state.currentMeetingId}`;
+    }
+
+    function currentWindow() {
+      return state.meetingData?.windows?.[state.currentIndex] || null;
+    }
+
+    function applySavedLabel(windowRecord) {
+      const saved = state.meetingData?.labels?.[windowRecord.example_id] || null;
+      if (!saved) {
+        setSelectedLabel(null);
+        notesBox.value = '';
+        setStatus('No label saved yet for this window.');
+        return;
+      }
+      setSelectedLabel(saved.human_label);
+      triggerType.value = saved.trigger_type && saved.trigger_type !== 'none' ? saved.trigger_type : '';
+      notesBox.value = saved.notes || '';
+      setStatus(`Saved ${saved.human_label} • updated ${new Date(saved.updated_at).toLocaleString()}`, 'success');
+    }
+
+    function applyModelSuggestion(windowRecord) {
+      const suggestion = state.suggestions[windowRecord.example_id];
+      if (!suggestion) {
+        setSuggestion('Suggestion not loaded yet.');
+        return;
+      }
+
+      const labelText = suggestion.human_label === 'should_trigger'
+        ? `Suggested ${suggestion.trigger_type}`
+        : 'Suggested no trigger';
+      setSuggestion(
+        `${labelText} • confidence ${Number(suggestion.confidence).toFixed(2)} • ${suggestion.reason}`,
+        suggestion.human_label === 'should_trigger' ? 'success' : ''
+      );
+
+      const saved = state.meetingData?.labels?.[windowRecord.example_id] || null;
+      if (saved) {
+        return;
+      }
+
+      setSelectedLabel(suggestion.human_label);
+      triggerType.value = suggestion.human_label === 'should_trigger' ? suggestion.trigger_type : '';
+      syncTriggerSelectState();
+    }
+
+    async function ensureSuggestion(windowRecord) {
+      if (!windowRecord) {
+        setSuggestion('Suggestion not loaded yet.');
+        return;
+      }
+
+      if (state.suggestions[windowRecord.example_id]) {
+        applyModelSuggestion(windowRecord);
+        return;
+      }
+
+      setSuggestion('Loading model suggestion...');
+      const response = await fetchJson('/api/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(windowRecord),
+      });
+      state.suggestions[windowRecord.example_id] = response.suggestion;
+      applyModelSuggestion(windowRecord);
+    }
+
+    async function renderCurrent() {
+      const windowRecord = currentWindow();
+      renderTranscript(windowRecord);
+      renderMeta(windowRecord);
+      renderProgress();
+      if (windowRecord) {
+        applySavedLabel(windowRecord);
+        await ensureSuggestion(windowRecord);
+      } else {
+        setSuggestion('Suggestion not loaded yet.');
+      }
+      document.getElementById('prevWindow').disabled = state.currentIndex <= 0;
+      document.getElementById('nextWindow').disabled = !state.meetingData || state.currentIndex >= state.meetingData.windows.length - 1;
+    }
+
+    async function loadMeetings() {
+      const data = await fetchJson('/api/meetings');
+      state.meetings = data.meetings;
+      meetingSelect.innerHTML = '';
+      for (const meetingId of state.meetings) {
+        const option = document.createElement('option');
+        option.value = meetingId;
+        option.textContent = meetingId;
+        meetingSelect.appendChild(option);
+      }
+      if (state.meetings.length > 0) {
+        state.currentMeetingId = state.meetings[0];
+        meetingSelect.value = state.currentMeetingId;
+      }
+    }
+
+    async function loadMeeting(meetingId, index = 0) {
+      state.currentMeetingId = meetingId;
+      setStatus('Loading meeting windows...');
+      const params = new URLSearchParams({
+        meeting_id: meetingId,
+        window_size: windowSize.value,
+        step: stepSize.value,
+      });
+      state.meetingData = await fetchJson(`/api/meeting?${params.toString()}`);
+      state.currentIndex = Math.max(0, Math.min(index, state.meetingData.windows.length - 1));
+      await renderCurrent();
+    }
+
+    async function saveCurrentLabel() {
+      const windowRecord = currentWindow();
+      if (!windowRecord) {
+        return;
+      }
+      const humanLabel = selectedLabel();
+      if (!humanLabel) {
+        setStatus('Pick a label before saving.', 'error');
+        return;
+      }
+      if (humanLabel === 'should_trigger' && !triggerType.value) {
+        setStatus('Choose a trigger type for positive examples.', 'error');
+        return;
+      }
+
+      const payload = {
+        meeting_id: windowRecord.meeting_id,
+        example_id: windowRecord.example_id,
+        window_index: windowRecord.window_index,
+        human_label: humanLabel,
+        trigger_type: triggerType.value,
+        notes: notesBox.value,
+        topic: windowRecord.topic,
+        start_time: windowRecord.start_time,
+        end_time: windowRecord.end_time,
+        weak_signals: windowRecord.weak_signals,
+        transcript_window: windowRecord.transcript_window,
+        model_suggestion: state.suggestions[windowRecord.example_id] || null,
+      };
+
+      await fetchJson('/api/label', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      state.meetingData.labels[windowRecord.example_id] = {
+        ...payload,
+        should_trigger: humanLabel === 'should_trigger',
+        updated_at: new Date().toISOString(),
+      };
+      state.meetingData.labeled_count = Object.values(state.meetingData.labels).filter(Boolean).length;
+      setStatus(`Saved ${humanLabel}.`, 'success');
+      renderProgress();
+    }
+
+    function jump(offset) {
+      if (!state.meetingData) {
+        return;
+      }
+      state.currentIndex = Math.max(0, Math.min(state.currentIndex + offset, state.meetingData.windows.length - 1));
+      renderCurrent();
+    }
+
+    function jumpToNextUnlabeled() {
+      if (!state.meetingData) {
+        return;
+      }
+      for (let index = state.currentIndex + 1; index < state.meetingData.windows.length; index += 1) {
+        const windowRecord = state.meetingData.windows[index];
+        if (!state.meetingData.labels[windowRecord.example_id]) {
+          state.currentIndex = index;
+          renderCurrent();
+          return;
+        }
+      }
+      setStatus('No later unlabeled windows in this meeting.', 'success');
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    document.getElementById('loadMeeting').addEventListener('click', async () => {
+      await loadMeeting(meetingSelect.value, 0);
+    });
+    document.getElementById('prevWindow').addEventListener('click', () => jump(-1));
+    document.getElementById('nextWindow').addEventListener('click', () => jump(1));
+    document.getElementById('nextUnlabeled').addEventListener('click', () => jumpToNextUnlabeled());
+    document.getElementById('saveLabel').addEventListener('click', async () => saveCurrentLabel());
+    document.getElementById('exportCsv').addEventListener('click', () => window.open('/api/export/csv', '_blank'));
+    document.getElementById('exportJsonl').addEventListener('click', () => window.open('/api/export/jsonl', '_blank'));
+    labelInputs().forEach((input) => input.addEventListener('change', syncTriggerSelectState));
+
+    window.addEventListener('keydown', async (event) => {
+      if (event.key === '1') {
+        setSelectedLabel('should_trigger');
+      } else if (event.key === '2') {
+        setSelectedLabel('should_not_trigger');
+      } else if (event.key === '3') {
+        setSelectedLabel('skip');
+      } else if (event.key === 'ArrowRight') {
+        jump(1);
+      } else if (event.key === 'ArrowLeft') {
+        jump(-1);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        await saveCurrentLabel();
+      }
+    });
+
+    (async function init() {
+      try {
+        await loadMeetings();
+        if (state.currentMeetingId) {
+          await loadMeeting(state.currentMeetingId, 0);
+        }
+      } catch (error) {
+        setStatus(error.message, 'error');
+      }
+    })();
+  </script>
+</body>
+</html>

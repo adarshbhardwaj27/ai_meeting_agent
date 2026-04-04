@@ -1,15 +1,15 @@
 """Ultra-fast local trigger scoring for proactive interventions.
 
-This module provides a tiny, dependency-free scoring model that can run on
-every trigger cycle in a few milliseconds. It is intentionally designed as a
-bootstrap model:
+This module keeps the runtime path intentionally light:
 
 - deterministic feature extraction from recent meeting turns
-- linear scoring with calibrated weights
-- no network calls or heavyweight ML dependencies
+- tiny linear scorer loaded from a model artifact when available
+- optional JSONL logging of feature vectors and trigger outcomes
+- no network calls or heavyweight runtime dependencies
 
-The interface is built so an offline-trained model can replace the hand-tuned
-weights later without changing TriggerEngine's call pattern.
+The current shipped profile is still bootstrap quality, but the interfaces here
+are designed so an offline-trained artifact can replace the built-in defaults
+without changing TriggerEngine's integration contract.
 """
 
 from __future__ import annotations
@@ -17,9 +17,11 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
 import math
+from pathlib import Path
 import re
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import structlog
 
@@ -38,6 +40,89 @@ class LinearTriggerProfile:
     weights: Dict[str, float]
 
 
+@dataclass(frozen=True)
+class FastTriggerPrediction:
+    """Scored trigger candidate emitted by the fast local model."""
+
+    trigger_type: TriggerType
+    confidence: float
+    threshold: float
+    accepted: bool
+    reason: str
+    features: Dict[str, float]
+    relevant_transcript: str
+    model_name: str
+    model_version: str
+
+    @property
+    def key(self) -> Tuple[str, str]:
+        return (self.trigger_type.value, self.reason)
+
+    def to_trigger(self) -> Trigger:
+        trigger = Trigger.create_proactive(
+            trigger_type=self.trigger_type,
+            confidence=round(self.confidence, 3),
+            reason=self.reason,
+        )
+        trigger.relevant_transcript = self.relevant_transcript
+        return trigger
+
+
+class FastTriggerTrainingLogger:
+    """Append feature vectors and prediction outcomes for future offline training."""
+
+    _DEFAULT_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "trigger_model_events.jsonl"
+
+    def __init__(self, enabled: bool = False, log_path: Optional[str] = None):
+        self.enabled = enabled
+        self.log_path = Path(log_path) if log_path else self._DEFAULT_LOG_PATH
+
+    def log_prediction_batch(
+        self,
+        *,
+        context: MeetingContext,
+        predictions: Sequence[FastTriggerPrediction],
+        rule_based_trigger_types: Sequence[TriggerType],
+        accepted_prediction_keys: Set[Tuple[str, str]],
+    ) -> None:
+        if not self.enabled or not predictions:
+            return
+
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat()
+
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            for prediction in predictions:
+                if not prediction.accepted:
+                    outcome = "below_threshold"
+                elif rule_based_trigger_types:
+                    outcome = "suppressed_by_existing_trigger"
+                elif prediction.key in accepted_prediction_keys:
+                    outcome = "accepted"
+                else:
+                    outcome = "suppressed_by_policy"
+
+                record = {
+                    "timestamp": timestamp,
+                    "meeting_id": context.meeting_id,
+                    "platform": context.platform,
+                    "model_name": prediction.model_name,
+                    "model_version": prediction.model_version,
+                    "trigger_type": prediction.trigger_type.value,
+                    "confidence": round(prediction.confidence, 6),
+                    "threshold": prediction.threshold,
+                    "accepted": prediction.accepted,
+                    "outcome": outcome,
+                    "reason": prediction.reason,
+                    "rule_based_trigger_types": [trigger_type.value for trigger_type in rule_based_trigger_types],
+                    "participants": sorted(context.participants),
+                    "current_topic": context.current_topic.name if context.current_topic else None,
+                    "features": prediction.features,
+                    "relevant_transcript": prediction.relevant_transcript[-400:],
+                }
+                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+
 class FastTriggerModel:
     """Fast local scorer that supplements heuristic triggers.
 
@@ -45,6 +130,8 @@ class FastTriggerModel:
     common product gap: natural multi-speaker uncertainty often does not match
     a single keyword regex, but still shows a clear conversational pattern.
     """
+
+    _DEFAULT_ARTIFACT_PATH = Path(__file__).resolve().parent / "model_artifacts" / "fast_trigger_model_v1.json"
 
     _RECENT_WINDOW = timedelta(minutes=2)
     _MAX_TURNS = 8
@@ -134,61 +221,151 @@ class FastTriggerModel:
         },
     )
 
+    def __init__(
+        self,
+        artifact_path: Optional[str] = None,
+        enable_training_log: bool = False,
+        training_log_path: Optional[str] = None,
+    ):
+        self.model_name = "fast_trigger_bootstrap"
+        self.model_version = "builtin"
+        self._profiles: Dict[TriggerType, LinearTriggerProfile] = {
+            TriggerType.REPEATED_CONFUSION: self._CONFUSION_PROFILE,
+        }
+        self._artifact_path = Path(artifact_path) if artifact_path else self._DEFAULT_ARTIFACT_PATH
+        self._training_logger = FastTriggerTrainingLogger(
+            enabled=enable_training_log,
+            log_path=training_log_path,
+        )
+        self._load_artifact()
+
+    def _load_artifact(self) -> None:
+        """Load model weights from an artifact file when available."""
+        if not self._artifact_path.exists():
+            return
+
+        try:
+            with self._artifact_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            profiles: Dict[TriggerType, LinearTriggerProfile] = {}
+            for profile_data in payload.get("profiles", []):
+                trigger_type = TriggerType(profile_data["trigger_type"])
+                profiles[trigger_type] = LinearTriggerProfile(
+                    trigger_type=trigger_type,
+                    bias=float(profile_data["bias"]),
+                    threshold=float(profile_data["threshold"]),
+                    weights={
+                        str(name): float(value)
+                        for name, value in profile_data.get("weights", {}).items()
+                    },
+                )
+
+            if profiles:
+                self._profiles = profiles
+                self.model_name = str(payload.get("model_name") or self.model_name)
+                self.model_version = str(payload.get("model_version") or self.model_version)
+                logger.info(
+                    "fast_trigger_model_artifact_loaded",
+                    artifact_path=str(self._artifact_path),
+                    model_name=self.model_name,
+                    model_version=self.model_version,
+                    profiles=list(profile.trigger_type.value for profile in profiles.values()),
+                )
+        except Exception as exc:
+            logger.warning(
+                "fast_trigger_model_artifact_invalid",
+                artifact_path=str(self._artifact_path),
+                error=str(exc),
+            )
+
+    def score_predictions(
+        self,
+        context: MeetingContext,
+        new_chunks: Optional[Sequence[TranscriptChunk]] = None,
+    ) -> List[FastTriggerPrediction]:
+        """Score proactive trigger candidates without applying policy gates."""
+        turns = self._recent_turns(context)
+        if len(turns) < 2:
+            return []
+
+        predictions: List[FastTriggerPrediction] = []
+        confusion = self._score_repeated_confusion(context, turns)
+        if confusion:
+            predictions.append(confusion)
+        return predictions
+
     def predict_triggers(
         self,
         context: MeetingContext,
         new_chunks: Optional[Sequence[TranscriptChunk]] = None,
     ) -> List[Trigger]:
         """Predict proactive triggers from recent conversational dynamics."""
-        turns = self._recent_turns(context)
-        if len(turns) < 2:
-            return []
+        predictions = self.score_predictions(context=context, new_chunks=new_chunks)
+        return [prediction.to_trigger() for prediction in predictions if prediction.accepted]
 
-        confusion = self._predict_repeated_confusion(context, turns)
-        return [confusion] if confusion else []
+    def log_predictions(
+        self,
+        *,
+        context: MeetingContext,
+        predictions: Sequence[FastTriggerPrediction],
+        rule_based_trigger_types: Sequence[TriggerType],
+        accepted_prediction_keys: Set[Tuple[str, str]],
+    ) -> None:
+        self._training_logger.log_prediction_batch(
+            context=context,
+            predictions=predictions,
+            rule_based_trigger_types=rule_based_trigger_types,
+            accepted_prediction_keys=accepted_prediction_keys,
+        )
 
-    def _predict_repeated_confusion(
+    def _score_repeated_confusion(
         self,
         context: MeetingContext,
         turns: Sequence[TranscriptChunk],
-    ) -> Optional[Trigger]:
+    ) -> Optional[FastTriggerPrediction]:
         features = self._build_confusion_features(context, turns)
+        profile = self._profiles.get(TriggerType.REPEATED_CONFUSION, self._CONFUSION_PROFILE)
 
         # Keep a hard floor so the model doesn't trigger on ordinary technical discussion.
-        uncertainty_signal = features["strong_confusion_hits"] + features["soft_uncertainty_hits"]
-        if uncertainty_signal < 2 and features["uncertain_speakers"] < 2:
-            return None
-
-        if not (
+        meets_floor = (
             features["strong_confusion_hits"] >= 2
             or features["uncertain_speakers"] >= 2
             or (
                 features["strong_confusion_hits"] >= 1
                 and features["soft_uncertainty_hits"] >= 2
             )
-        ):
-            return None
+        )
 
-        probability = self._score(features, self._CONFUSION_PROFILE)
-        if probability < self._CONFUSION_PROFILE.threshold:
-            return None
+        probability = self._score(features, profile)
+        accepted = meets_floor and probability >= profile.threshold
 
-        trigger = Trigger.create_proactive(
-            TriggerType.REPEATED_CONFUSION,
-            confidence=round(probability, 3),
+        relevant_transcript = " ".join(turn.text for turn in turns)[-500:]
+        prediction = FastTriggerPrediction(
+            trigger_type=TriggerType.REPEATED_CONFUSION,
+            confidence=round(probability, 6),
+            threshold=profile.threshold,
+            accepted=accepted,
             reason=self._build_confusion_reason(features),
+            features={key: round(float(value), 6) for key, value in features.items()},
+            relevant_transcript=relevant_transcript,
+            model_name=self.model_name,
+            model_version=self.model_version,
         )
-        trigger.relevant_transcript = " ".join(turn.text for turn in turns)[-500:]
 
-        logger.debug(
-            "fast_trigger_model_fired",
-            trigger_type=trigger.type.value,
-            confidence=trigger.confidence,
-            strong_confusion_hits=features["strong_confusion_hits"],
-            soft_uncertainty_hits=features["soft_uncertainty_hits"],
-            uncertain_speakers=features["uncertain_speakers"],
-        )
-        return trigger
+        if accepted:
+            logger.debug(
+                "fast_trigger_model_fired",
+                trigger_type=prediction.trigger_type.value,
+                confidence=prediction.confidence,
+                strong_confusion_hits=features["strong_confusion_hits"],
+                soft_uncertainty_hits=features["soft_uncertainty_hits"],
+                uncertain_speakers=features["uncertain_speakers"],
+                model_name=self.model_name,
+                model_version=self.model_version,
+            )
+
+        return prediction
 
     def _build_confusion_features(
         self,
