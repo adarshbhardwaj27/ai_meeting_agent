@@ -774,30 +774,52 @@ class LLMService:
             80 if trigger and trigger.type == TriggerType.VOICE_ADDRESS else 150
         )
         model_name = model_override or self._model
-        
+
+        # Tighter deadline for voice/commands (user is waiting); generous for
+        # proactive calls.  This is defense-in-depth on top of the dispatcher's
+        # outer per-tier deadline — it guarantees a single provider call can
+        # never hang indefinitely regardless of call site.
+        llm_timeout = (
+            8.0 if trigger and trigger.type == TriggerType.VOICE_ADDRESS else 25.0
+        )
+
         try:
             if self.provider in (LLMProvider.OPENAI, LLMProvider.AZURE_OPENAI):
-                response = await self._client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
+                response = await asyncio.wait_for(
+                    self._client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    ),
+                    timeout=llm_timeout,
                 )
                 return response.choices[0].message.content
-                
+
             elif self.provider == LLMProvider.ANTHROPIC:
-                response = await self._client.messages.create(
-                    model=model_name,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
+                response = await asyncio.wait_for(
+                    self._client.messages.create(
+                        model=model_name,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": user_prompt}],
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    ),
+                    timeout=llm_timeout,
                 )
                 return response.content[0].text
-                
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "llm_call_timeout",
+                provider=self.provider.value,
+                timeout_s=llm_timeout,
+                trigger_type=trigger.type.value if trigger else None,
+            )
+            return None
         except Exception as e:
             logger.error("llm_call_failed", error=str(e))
             return None
