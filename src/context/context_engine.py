@@ -17,6 +17,44 @@ from typing import List, Optional, Callable, Deque, Awaitable
 import re
 import structlog
 
+# ---------------------------------------------------------------------------
+# Decision-state evidence patterns
+#
+# Status transitions are only allowed when these patterns appear in FRESH
+# transcript text — never based on generic words like "okay" or "moving on".
+# ---------------------------------------------------------------------------
+
+# Common words that carry no topical meaning and must not be counted toward
+# decision-similarity scores.
+_STOP_WORDS: frozenset = frozenset({
+    "a", "an", "the", "is", "it", "in", "on", "at", "to", "for", "of",
+    "and", "or", "but", "not", "with", "this", "that", "we", "i", "you",
+    "he", "she", "they", "be", "are", "was", "were", "will", "would",
+    "should", "could", "have", "has", "had", "do", "does", "did",
+    "okay", "ok", "thanks", "thank", "yes", "no", "yeah", "alright",
+    "moving", "forward", "next", "let", "so", "now", "go", "just",
+    "think", "know", "need", "want", "use", "also",
+})
+
+# Signals that a decision is being *actively deliberated*.
+# Required before PROPOSED → DISCUSSED.
+_DISCUSSION_SIGNAL = re.compile(
+    r"\b(?:what do you think|what about|how about|thoughts on|"
+    r"regarding|talking about|back to|revisiting|consider|on this|discuss)"
+    r"\b",
+    re.IGNORECASE,
+)
+
+# Signals that *consensus is forming* around a decision.
+# Required before DISCUSSED → TENTATIVE, or TENTATIVE → CONFIRMED.
+_CONSENSUS_SIGNAL = re.compile(
+    r"\b(?:agreed?|approve[sd]?|confirmed?|decided?|finalized?|"
+    r"we(?:'| a)?re going with|sounds good|that works|let'?s go with|"
+    r"everyone agrees?|all in agreement|perfect|great|done|settled|yes let'?s)"
+    r"\b",
+    re.IGNORECASE,
+)
+
 from src.config import config
 from src.context.models import (
     MeetingContext, TranscriptChunk, Topic, Concern, Decision, Trigger,
@@ -74,6 +112,11 @@ class ContextEngine:
         # Keep a bounded processing buffer even if pruning is delayed.
         self._chunk_buffer: Deque[TranscriptChunk] = deque(maxlen=1000)
         self._pending_analysis = False
+
+        # Monotonic analysis cursor — chunk_id of the last chunk that was
+        # fully processed.  _get_fresh_chunks() returns only chunks after
+        # this point so each analysis pass sees strictly new data.
+        self._last_analyzed_chunk_id: Optional[str] = None
         
         # Background task handle
         self._update_task: Optional[asyncio.Task] = None
@@ -228,48 +271,74 @@ class ContextEngine:
     async def _analyze_context(self):
         """
         Analyze recent transcript for state changes.
-        This runs every few seconds to keep context up-to-date.
+        Only processes chunks that have NOT been seen in a previous pass,
+        enforced via a per-chunk-id cursor.  This prevents old speech from
+        re-triggering decision escalations on every cycle.
         """
-        recent_chunks = self._get_recent_unprocessed_chunks()
-
-        # Get recent unprocessed text
-        recent_text = self._get_recent_unprocessed_text(recent_chunks)
-        if not recent_text:
+        fresh_chunks = self._get_fresh_chunks()
+        if not fresh_chunks:
             return
-        
-        # Detect concerns
-        await self._detect_concerns(recent_text)
-        
-        # Detect decisions
-        await self._detect_decisions(recent_text)
-        
-        # Detect topic changes
-        await self._detect_topic_changes(recent_text)
-        
-        # Detect open questions
-        await self._detect_questions(recent_text)
 
-        # Detect action items / follow-ups
-        await self._detect_action_items(recent_chunks)
-        
+        fresh_text = " ".join(c.text for c in fresh_chunks)
+
+        await self._detect_concerns(fresh_text)
+        await self._detect_decisions(fresh_text)
+        self._check_pending_decision_escalations(fresh_text)
+        await self._detect_topic_changes(fresh_text)
+        await self._detect_questions(fresh_text)
+        await self._detect_action_items(fresh_chunks)
+
         logger.debug(
             "context_analyzed",
+            fresh_chunks=len(fresh_chunks),
             concerns=len(self.context.concerns_raised),
             pending_decisions=len(self.context.decisions_pending),
-            confirmed_decisions=len(self.context.decisions_confirmed)
+            confirmed_decisions=len(self.context.decisions_confirmed),
         )
     
-    def _get_recent_unprocessed_chunks(self) -> List[TranscriptChunk]:
-        """Get recent final chunks that should feed context analysis."""
-        return [c for c in list(self._chunk_buffer)[-20:] if c.is_final]
+    def _get_fresh_chunks(self) -> List[TranscriptChunk]:
+        """
+        Return only final chunks that have NOT been analyzed before.
 
-    def _get_recent_unprocessed_text(
-        self,
-        recent_chunks: Optional[List[TranscriptChunk]] = None,
-    ) -> str:
-        """Get text from chunks that haven't been fully analyzed."""
-        chunks = recent_chunks or self._get_recent_unprocessed_chunks()
-        return " ".join(c.text for c in chunks)
+        Uses ``_last_analyzed_chunk_id`` as a monotonic cursor.  On each
+        call, only chunks added *after* the cursor are returned, and the
+        cursor advances to the last returned chunk's id.
+
+        Buffer-rotation safety: if the cursor id is no longer in the
+        deque (happens when a very long meeting fills the 1000-item
+        buffer), the method returns an empty list and advances the cursor
+        to the current tail.  This is the conservative choice — it avoids
+        replaying an unknown amount of old data.
+        """
+        buffer_list = [c for c in self._chunk_buffer if c.is_final]
+
+        if self._last_analyzed_chunk_id is None:
+            # First pass — process everything accumulated so far
+            fresh = buffer_list
+        else:
+            cursor_pos = next(
+                (i for i, c in enumerate(buffer_list)
+                 if c.chunk_id == self._last_analyzed_chunk_id),
+                None,
+            )
+            if cursor_pos is not None:
+                fresh = buffer_list[cursor_pos + 1:]
+            else:
+                # Cursor has rotated out of the buffer — skip silently
+                logger.debug(
+                    "analysis_cursor_rotated",
+                    cursor_id=self._last_analyzed_chunk_id,
+                    buffer_size=len(buffer_list),
+                )
+                fresh = []
+
+        # Advance cursor regardless of whether fresh is empty
+        if fresh:
+            self._last_analyzed_chunk_id = fresh[-1].chunk_id
+        elif buffer_list:
+            self._last_analyzed_chunk_id = buffer_list[-1].chunk_id
+
+        return fresh
     
     async def _detect_concerns(self, text: str):
         """Detect concerns or risks mentioned in the text."""
@@ -321,51 +390,145 @@ class ContextEngine:
     async def _detect_decisions(self, text: str):
         """Detect decisions being made or proposed."""
         text_lower = text.lower()
-        
+
         for pattern in self._decision_patterns:
             matches = re.finditer(pattern, text_lower, re.IGNORECASE)
             for match in matches:
                 decision_text = match.group(1).strip() if match.groups() else match.group(0)
-                
-                # Check if this updates an existing decision
+
                 existing = self._find_similar_decision(decision_text)
                 if existing:
-                    # Escalate status
-                    if existing.status == DecisionStatus.PROPOSED:
-                        existing.status = DecisionStatus.DISCUSSED
-                    elif existing.status == DecisionStatus.DISCUSSED:
-                        existing.status = DecisionStatus.TENTATIVE
+                    self._try_escalate_decision(existing, text)
                     continue
-                
-                # Create new decision
+
+                # New decision
                 decision = Decision.create(
                     description=decision_text.capitalize(),
-                    proposed_by=self.context.active_speaker
+                    proposed_by=self.context.active_speaker,
                 )
-                
-                # Check for related concerns
                 related_concerns = self._find_related_concerns(decision_text)
                 decision.related_concerns = [c.id for c in related_concerns]
-                
                 self.context.decisions_pending.append(decision)
                 logger.info(
                     "decision_detected",
                     description=decision.description,
-                    related_concerns=len(related_concerns)
+                    related_concerns=len(related_concerns),
+                )
+
+    def _check_pending_decision_escalations(self, fresh_text: str) -> None:
+        """
+        Scan all pending decisions for escalation signals in fresh_text.
+
+        Handles the path where someone *discusses or agrees* with an existing
+        decision without re-proposing it via a decision pattern, e.g.:
+          "What do you think about the Kafka idea?"  -> PROPOSED -> DISCUSSED
+          "Agreed, sounds good with Kafka."           -> DISCUSSED -> TENTATIVE
+
+        Requires:
+          - At least 1 topic word from the decision appears in fresh_text
+            (prevents unrelated consensus phrases from touching every decision)
+          - The appropriate signal phrase (_DISCUSSION_SIGNAL or _CONSENSUS_SIGNAL)
+        """
+        fresh_topic_words = {
+            w for w in fresh_text.lower().split()
+            if w not in _STOP_WORDS and len(w) > 2
+        }
+        if not fresh_topic_words:
+            return
+
+        for decision in list(self.context.decisions_pending):
+            decision_topic_words = {
+                w for w in decision.description.lower().split()
+                if w not in _STOP_WORDS and len(w) > 2
+            }
+            if not (fresh_topic_words & decision_topic_words):
+                continue  # no topical link to this decision
+
+            self._try_escalate_decision(decision, fresh_text)
+
+    def _try_escalate_decision(self, decision: Decision, fresh_text: str) -> None:
+        """
+        Advance a decision's status only when explicit evidence is present
+        in the fresh transcript text.
+
+        Transition rules
+        ----------------
+        PROPOSED  → DISCUSSED : A discussion-signal phrase ("what do you think",
+                                 "regarding", "talking about", …) appears in the
+                                 fresh text — meaning the topic is under active
+                                 deliberation.
+        DISCUSSED → TENTATIVE : A consensus-signal phrase ("agreed", "sounds good",
+                                 "let's go with", …) appears — meaning the group
+                                 is converging on a choice.
+        TENTATIVE → CONFIRMED : A consensus-signal phrase appears again — the
+                                 group has fully committed.  The decision is moved
+                                 to decisions_confirmed and Decision.confirm() is
+                                 called to stamp the confirmed_at timestamp.
+
+        Generic utterances like "okay thanks" or "moving on" match none of
+        these patterns and therefore never trigger a status change.
+        """
+        if decision.status == DecisionStatus.PROPOSED:
+            if _DISCUSSION_SIGNAL.search(fresh_text):
+                decision.status = DecisionStatus.DISCUSSED
+                logger.info(
+                    "decision_status_escalated",
+                    description=decision.description[:60],
+                    new_status=DecisionStatus.DISCUSSED.value,
+                )
+
+        elif decision.status == DecisionStatus.DISCUSSED:
+            if _CONSENSUS_SIGNAL.search(fresh_text):
+                decision.status = DecisionStatus.TENTATIVE
+                logger.info(
+                    "decision_status_escalated",
+                    description=decision.description[:60],
+                    new_status=DecisionStatus.TENTATIVE.value,
+                )
+
+        elif decision.status == DecisionStatus.TENTATIVE:
+            if _CONSENSUS_SIGNAL.search(fresh_text):
+                decision.confirm()
+                try:
+                    self.context.decisions_pending.remove(decision)
+                except ValueError:
+                    pass
+                self.context.decisions_confirmed.append(decision)
+                logger.info(
+                    "decision_confirmed",
+                    description=decision.description[:60],
                 )
     
     def _find_similar_decision(self, text: str) -> Optional[Decision]:
-        """Find an existing decision similar to the given text."""
-        text_lower = text.lower()
-        text_words = set(text_lower.split())
-        
+        """
+        Find an existing decision similar to the given text.
+
+        Stop words ("okay", "thanks", "moving", "on", prepositions, etc.) are
+        excluded before computing overlap so that generic filler speech cannot
+        accidentally match a topically unrelated pending decision.
+
+        Returns None when the candidate text has fewer than 2 meaningful topic
+        words after stop-word removal, preventing any match on pure filler.
+        """
+        topic_words = {
+            w for w in text.lower().split()
+            if w not in _STOP_WORDS and len(w) > 2
+        }
+        if not topic_words:
+            return None
+
         for decision in self.context.decisions_pending:
-            decision_words = set(decision.description.lower().split())
-            # Check for significant word overlap
-            overlap = len(text_words & decision_words)
-            if overlap >= min(3, len(text_words)):
+            decision_topic_words = {
+                w for w in decision.description.lower().split()
+                if w not in _STOP_WORDS and len(w) > 2
+            }
+            overlap = len(topic_words & decision_topic_words)
+            # Single-topic-word texts (e.g. pattern captured just "kafka")
+            # need only 1 overlapping word to match; longer texts need 2-3.
+            required = 1 if len(topic_words) == 1 else max(2, min(3, len(topic_words)))
+            if overlap >= required:
                 return decision
-        
+
         return None
     
     def _find_related_concerns(self, decision_text: str) -> List[Concern]:

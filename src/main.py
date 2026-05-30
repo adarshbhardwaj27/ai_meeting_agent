@@ -27,6 +27,7 @@ from src.chat import ChatManager
 from src.bot import create_bot, detect_platform, BaseMeetingBot, BotState, MeetingPlatform
 from src.transcription.realtime_server import RealtimeTranscriptServer
 from src.meeting_logger import MeetingLogger
+from src.trigger_dispatcher import TriggerDispatcher
 
 # Configure structured logging
 structlog.configure(
@@ -92,6 +93,7 @@ class MeetingAssistant:
         self._new_chunks: List[TranscriptChunk] = []
         self._chunk_lock = asyncio.Lock()
         self._background_tasks: set[asyncio.Task] = set()
+        self._trigger_dispatcher: Optional[TriggerDispatcher] = None
 
         # Session logger (append-mode file log for post-meeting analysis)
         self.meeting_logger: Optional[MeetingLogger] = None
@@ -190,6 +192,10 @@ class MeetingAssistant:
             await self.context_engine.start()
             await self.trigger_engine.start()
 
+            # Priority-based async dispatcher — keeps _main_loop non-blocking
+            self._trigger_dispatcher = TriggerDispatcher(self._process_trigger)
+            self._trigger_dispatcher.start()
+
             # Main processing loop
             self._running = True
             self._main_loop_task = asyncio.create_task(self._main_loop())
@@ -214,6 +220,10 @@ class MeetingAssistant:
                 await self._main_loop_task
             except asyncio.CancelledError:
                 pass
+
+        if self._trigger_dispatcher:
+            await self._trigger_dispatcher.stop()
+            self._trigger_dispatcher = None
 
         await self._cancel_background_tasks()
 
@@ -253,7 +263,7 @@ class MeetingAssistant:
                     )
 
                     for trigger in triggers:
-                        await self._process_trigger(trigger, context)
+                        self._trigger_dispatcher.dispatch(trigger, context)
 
                 elif self.context_engine and self.trigger_engine:
                     # No new chunks, but still need to check if voice buffer
@@ -264,7 +274,7 @@ class MeetingAssistant:
                         context=context, new_chunks=[]
                     )
                     for trigger in triggers:
-                        await self._process_trigger(trigger, context)
+                        self._trigger_dispatcher.dispatch(trigger, context)
 
                 await asyncio.sleep(config.trigger.check_interval_ms / 1000.0)
 
@@ -298,7 +308,7 @@ class MeetingAssistant:
                 speaker=trigger.reason[:40] if trigger.reason else "",
                 text=trigger.relevant_transcript or "",
                 confidence=trigger.confidence,
-            )
+            )   
 
         try:
             recent_text = context.get_recent_text(minutes=3)
@@ -453,7 +463,7 @@ class MeetingAssistant:
             )
 
     async def _process_command(self, sender: str, text: str):
-        if not self.context_engine or not self.trigger_engine:
+        if not self.context_engine or not self.trigger_engine or not self._trigger_dispatcher:
             return
         context = self.context_engine.get_context_snapshot()
         triggers = await self.trigger_engine.check_for_triggers(
@@ -462,7 +472,7 @@ class MeetingAssistant:
         for trigger in triggers:
             if trigger.type == TriggerType.EXPLICIT_COMMAND:
                 trigger.speaker = sender
-                await self._process_trigger(trigger, context)
+                self._trigger_dispatcher.dispatch(trigger, context)
                 break
 
     def _on_bot_state_change(self, state: BotState):
@@ -475,12 +485,12 @@ class MeetingAssistant:
 
     async def _on_summary_trigger(self, trigger: Trigger, context: MeetingContext):
         """Process summary-time triggers through the same path as live triggers."""
-        if not self.trigger_engine:
+        if not self.trigger_engine or not self._trigger_dispatcher:
             return
 
         accepted_triggers = self.trigger_engine.accept_external_triggers([trigger])
         for accepted_trigger in accepted_triggers:
-            await self._process_trigger(accepted_trigger, context)
+            self._trigger_dispatcher.dispatch(accepted_trigger, context)
 
 
 # ── Entry points ─────────────────────────────────────────────────────
