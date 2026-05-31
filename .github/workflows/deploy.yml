@@ -58,10 +58,14 @@ jobs:
             set -e
             cd /opt/meetmind
 
-            # Pull latest images
+            # Pull latest image
             docker-compose pull api
 
-            # Zero-downtime restart of the API container only
+            # Stop and remove old container to avoid docker-compose v1 ContainerConfig bug
+            docker-compose stop api || true
+            docker-compose rm -f api || true
+
+            # Start fresh container
             docker-compose up -d --no-deps api
 
             # Clean up old images (keep last 3)
