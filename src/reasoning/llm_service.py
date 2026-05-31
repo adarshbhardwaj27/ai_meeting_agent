@@ -409,11 +409,12 @@ class LLMService:
             "- Keep the full output under 900 characters"
         )
 
+        joined_transcript = "\n".join(transcript_lines)
         user_prompt = (
             "Existing persistent meeting memory:\n"
             f"{(existing_summary or 'None')[:1200]}\n\n"
             "New older transcript to merge:\n"
-            f"{'\n'.join(transcript_lines)}\n\n"
+            f"{joined_transcript}\n\n"
             "Rewrite the persistent meeting memory now."
         )
 
@@ -455,11 +456,12 @@ class LLMService:
             "If there is no worthwhile inconsistency, output Trigger: no and use None for the other fields."
         )
 
+        joined_transcript = "\n".join(transcript_lines)
         user_prompt = (
             "Existing persistent meeting memory:\n"
             f"{(existing_summary or 'None')[:1200]}\n\n"
             "New older transcript under review:\n"
-            f"{'\n'.join(transcript_lines)}\n\n"
+            f"{joined_transcript}\n\n"
             "Should a factual_inconsistency trigger be raised now?"
         )
 
