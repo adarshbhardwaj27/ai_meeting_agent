@@ -1,0 +1,70 @@
+# MeetMind AI — Oracle VM deployment
+# Place this file at /opt/meetmind/docker-compose.yml on the Oracle VM.
+#
+# Images are pulled from GitHub Container Registry (ghcr.io).
+# Secrets come from /opt/meetmind/.env — never commit that file.
+#
+# Usage:
+#   docker compose pull && docker compose up -d
+
+services:
+
+  # ── Python FastAPI backend ────────────────────────────────────────────────
+  api:
+    image: ghcr.io/${GITHUB_ORG}/meet_ai_agent:latest
+    container_name: meetmind-api
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"    # Only exposed to localhost — nginx proxies in
+      - "0.0.0.0:8766:8766"      # Recall.ai WebSocket — needs direct public access
+    volumes:
+      - api_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── React website ─────────────────────────────────────────────────────────
+  web:
+    image: ghcr.io/${GITHUB_ORG}/meetmind-website:latest
+    container_name: meetmind-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"      # Only exposed to localhost — nginx proxies in
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── nginx reverse proxy + SSL termination ─────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: meetmind-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - api
+      - web
+
+  # ── Certbot (Let's Encrypt SSL) ───────────────────────────────────────────
+  # Run once to issue cert, then it auto-renews via cron (see README).
+  certbot:
+    image: certbot/certbot:latest
+    container_name: meetmind-certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do sleep 12h; certbot renew; done"
+
+volumes:
+  api_logs:
