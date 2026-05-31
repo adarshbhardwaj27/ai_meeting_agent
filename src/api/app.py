@@ -172,7 +172,7 @@ async def _run_assistant(session_id: str, meeting_url: str):
 
     def on_trigger(trigger, context=None):
         store.push_log(session_id, "SUCCESS",
-                       f"Trigger fired: {trigger.type.value} (priority {trigger.priority})")
+                       f"Trigger fired: {trigger.type.value} (confidence {trigger.confidence:.0%})")
         store.add_event(session_id, "active",
                         f"Trigger: {trigger.type.value} detected")
 
