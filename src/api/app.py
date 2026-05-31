@@ -170,13 +170,13 @@ async def _run_assistant(session_id: str, meeting_url: str):
 
     # ── Observable hooks ──────────────────────────────────────────────
 
-    def on_trigger(trigger):
+    def on_trigger(trigger, context=None):
         store.push_log(session_id, "SUCCESS",
                        f"Trigger fired: {trigger.type.value} (priority {trigger.priority})")
         store.add_event(session_id, "active",
                         f"Trigger: {trigger.type.value} detected")
 
-    def on_response(message):
+    def on_response(message, trigger=None):
         store.push_log(session_id, "SUCCESS",
                        f"Response sent to meeting: \"{str(message)[:120]}\"")
         store.add_event(session_id, "success", "Alex sent a message to the meeting")
