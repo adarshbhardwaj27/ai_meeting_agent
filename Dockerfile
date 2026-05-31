@@ -17,6 +17,11 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
+# System dependencies (ffmpeg for ElevenLabs TTS audio output)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user for security
 RUN groupadd -r meetmind && useradd -r -g meetmind meetmind
 
