@@ -23,10 +23,13 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import secrets
+
 import structlog
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, HttpUrl, field_validator
 
 from src.api.session_store import store
@@ -38,6 +41,23 @@ logger = structlog.get_logger()
 # ── Allowed CORS origins ──────────────────────────────────────────────────────
 _raw = os.getenv("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS = [o.strip() for o in _raw.split(",")] if _raw != "*" else ["*"]
+
+# ── API key auth ──────────────────────────────────────────────────────────────
+_API_KEY = os.getenv("API_SECRET_KEY", "")
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def require_api_key(key: str = Security(_api_key_header)) -> None:
+    """Dependency — rejects requests with a missing or wrong API key.
+    If API_SECRET_KEY is not set in env the check is skipped (dev mode).
+    """
+    if not _API_KEY:
+        # No key configured — allow all (local dev only)
+        return
+    if not key or not secrets.compare_digest(key, _API_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key header.",
+        )
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
@@ -204,12 +224,12 @@ async def health():
 
 
 @app.get("/api/v1/sessions")
-async def list_sessions():
+async def list_sessions(_: None = Depends(require_api_key)):
     return {"sessions": [s.to_dict() for s in store.all()]}
 
 
 @app.post("/api/v1/sessions", status_code=201)
-async def join_meeting(body: JoinRequest):
+async def join_meeting(body: JoinRequest, _: None = Depends(require_api_key)):
     session = store.create(body.meeting_url)
     task = asyncio.create_task(_run_assistant(session.id, body.meeting_url))
     session.task = task
@@ -218,7 +238,7 @@ async def join_meeting(body: JoinRequest):
 
 
 @app.get("/api/v1/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, _: None = Depends(require_api_key)):
     s = store.get(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -226,7 +246,7 @@ async def get_session(session_id: str):
 
 
 @app.delete("/api/v1/sessions/{session_id}")
-async def leave_meeting(session_id: str):
+async def leave_meeting(session_id: str, _: None = Depends(require_api_key)):
     s = store.get(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -245,7 +265,7 @@ async def leave_meeting(session_id: str):
 
 
 @app.get("/api/v1/sessions/{session_id}/logs")
-async def stream_logs(session_id: str, request: Request):
+async def stream_logs(session_id: str, request: Request, _: None = Depends(require_api_key)):
     """Server-Sent Events endpoint — streams log entries in real time."""
     s = store.get(session_id)
     if not s:
