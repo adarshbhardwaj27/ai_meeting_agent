@@ -59,10 +59,10 @@ jobs:
             cd /opt/meetmind
 
             # Pull latest images
-            docker compose pull api
+            docker-compose pull api
 
             # Zero-downtime restart of the API container only
-            docker compose up -d --no-deps api
+            docker-compose up -d --no-deps api
 
             # Clean up old images (keep last 3)
             docker image prune -f --filter "until=72h"
