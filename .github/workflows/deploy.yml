@@ -2,7 +2,7 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [main]
+    branches: [main, teams-bot-ml-version]
 
 env:
   REGISTRY: ghcr.io
