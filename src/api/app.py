@@ -24,6 +24,8 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from datetime import datetime, timezone
+
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,8 +37,9 @@ from src.api.session_store import store
 from src.auth.router import router as auth_router
 from src.auth.service import decode_access_token
 from src.bot import detect_platform
-from src.db.session import init_db
+from src.db.session import init_db, AsyncSessionLocal
 from src.main import MeetingAssistant
+from src.api.microsoft_router import router as microsoft_router
 
 logger = structlog.get_logger()
 
@@ -96,8 +99,10 @@ async def require_auth(request: Request) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    renewal_task = asyncio.create_task(_subscription_renewal_loop())
     logger.info("api_startup")
     yield
+    renewal_task.cancel()
     # Gracefully stop all running sessions on shutdown
     logger.info("api_shutdown", active_sessions=len(store.all()))
     tasks = []
@@ -106,6 +111,43 @@ async def lifespan(app: FastAPI):
             tasks.append(asyncio.create_task(session.assistant.stop()))
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _subscription_renewal_loop():
+    """Hourly background task: renew Graph subscriptions expiring within 24 h."""
+    from datetime import timedelta
+    from sqlalchemy import select
+    from src.db.models import MicrosoftTenant
+    from src.integrations.microsoft.graph_client import get_valid_token, renew_subscription
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            async with AsyncSessionLocal() as db:
+                cutoff = datetime.now(timezone.utc) + timedelta(hours=24)
+                result = await db.execute(
+                    select(MicrosoftTenant).where(
+                        MicrosoftTenant.subscription_id.isnot(None),
+                        MicrosoftTenant.subscription_expires_at < cutoff,
+                    )
+                )
+                for tenant in result.scalars().all():
+                    try:
+                        token = await get_valid_token(tenant, db)
+                        sub = await renew_subscription(token, tenant.subscription_id)
+                        expiry = sub.get("expirationDateTime", "")
+                        if expiry:
+                            tenant.subscription_expires_at = datetime.fromisoformat(
+                                expiry.replace("Z", "+00:00")
+                            )
+                        await db.commit()
+                        logger.info("subscription_renewed", tenant_id=tenant.tenant_id)
+                    except Exception as e:
+                        logger.error("subscription_renewal_failed",
+                                     tenant_id=tenant.tenant_id, error=str(e))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error("renewal_loop_error", error=str(e))
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -125,6 +167,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(microsoft_router)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
