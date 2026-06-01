@@ -33,7 +33,6 @@ logs/
 
 # Docs / assets not needed at runtime
 docs/
-tools/
 *.md
 
 # Git
