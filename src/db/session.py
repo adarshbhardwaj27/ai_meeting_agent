@@ -19,10 +19,16 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 async def init_db() -> None:
     """Create all tables and the data/ directory if needed."""
-    # Ensure the data directory exists for the SQLite file
+    # For SQLite, try to create the parent directory (works for relative paths
+    # and paths the app user owns). In Docker the directory is pre-created via
+    # the Dockerfile, so a PermissionError here just means it already exists
+    # via a volume mount — safe to ignore.
     if DATABASE_URL.startswith("sqlite"):
         db_path = DATABASE_URL.replace("sqlite+aiosqlite:///", "")
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            pass  # Directory provided by volume mount — no action needed
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
