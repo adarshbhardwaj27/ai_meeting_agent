@@ -51,6 +51,7 @@ class Session:
     meeting_url: str
     status: str                       # state machine value
     started_at: datetime
+    company_id: str = ""              # scopes session to a company
     events: List[SessionEvent] = field(default_factory=list)
     log_buf: deque = field(default_factory=lambda: deque(maxlen=500))
     log_queues: List[asyncio.Queue] = field(default_factory=list)
@@ -74,13 +75,14 @@ class SessionStore:
         self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
 
-    def create(self, meeting_url: str) -> Session:
+    def create(self, meeting_url: str, company_id: str = "") -> Session:
         session_id = str(uuid.uuid4())
         session = Session(
             id=session_id,
             meeting_url=meeting_url,
             status="CONNECTING",
             started_at=datetime.now(timezone.utc),
+            company_id=company_id,
         )
         self._sessions[session_id] = session
         return session
@@ -88,8 +90,11 @@ class SessionStore:
     def get(self, session_id: str) -> Optional[Session]:
         return self._sessions.get(session_id)
 
-    def all(self) -> List[Session]:
-        return list(self._sessions.values())
+    def all(self, company_id: Optional[str] = None) -> List[Session]:
+        sessions = list(self._sessions.values())
+        if company_id and company_id not in ("__system__", "__dev__"):
+            sessions = [s for s in sessions if s.company_id == company_id]
+        return sessions
 
     def remove(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)

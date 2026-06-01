@@ -20,10 +20,9 @@ CORS is open for dev; tighten ALLOWED_ORIGINS in production via env var.
 import asyncio
 import json
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-
-import secrets
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
@@ -33,7 +32,10 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, HttpUrl, field_validator
 
 from src.api.session_store import store
+from src.auth.router import router as auth_router
+from src.auth.service import decode_access_token
 from src.bot import detect_platform
+from src.db.session import init_db
 from src.main import MeetingAssistant
 
 logger = structlog.get_logger()
@@ -51,7 +53,6 @@ async def require_api_key(key: str = Security(_api_key_header)) -> None:
     If API_SECRET_KEY is not set in env the check is skipped (dev mode).
     """
     if not _API_KEY:
-        # No key configured — allow all (local dev only)
         return
     if not key or not secrets.compare_digest(key, _API_KEY):
         raise HTTPException(
@@ -60,10 +61,41 @@ async def require_api_key(key: str = Security(_api_key_header)) -> None:
         )
 
 
+async def require_auth(request: Request) -> dict:
+    """Dependency — validates the httpOnly JWT cookie and returns the payload.
+    Returns: { company_id, user_id, exp }
+    Falls back to X-API-Key check for machine-to-machine calls (CI/CD scripts).
+    """
+    token = request.cookies.get("access_token")
+    if token:
+        payload = decode_access_token(token)
+        if payload:
+            return payload
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session.",
+        )
+
+    # Fallback: X-API-Key lets automation scripts still hit the API
+    key = request.headers.get("X-API-Key", "")
+    if _API_KEY and secrets.compare_digest(key, _API_KEY):
+        return {"company_id": "__system__", "user_id": "__system__"}
+
+    if not _API_KEY and not token:
+        # Dev mode — no secrets configured, allow all
+        return {"company_id": "__dev__", "user_id": "__dev__"}
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated.",
+    )
+
+
 # ── Lifespan ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_db()
     logger.info("api_startup")
     yield
     # Gracefully stop all running sessions on shutdown
@@ -91,6 +123,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -224,13 +258,14 @@ async def health():
 
 
 @app.get("/api/v1/sessions")
-async def list_sessions(_: None = Depends(require_api_key)):
-    return {"sessions": [s.to_dict() for s in store.all()]}
+async def list_sessions(auth: dict = Depends(require_auth)):
+    company_id = auth["company_id"]
+    return {"sessions": [s.to_dict() for s in store.all(company_id=company_id)]}
 
 
 @app.post("/api/v1/sessions", status_code=201)
-async def join_meeting(body: JoinRequest, _: None = Depends(require_api_key)):
-    session = store.create(body.meeting_url)
+async def join_meeting(body: JoinRequest, auth: dict = Depends(require_auth)):
+    session = store.create(body.meeting_url, company_id=auth["company_id"])
     task = asyncio.create_task(_run_assistant(session.id, body.meeting_url))
     session.task = task
     logger.info("session_created", session_id=session.id, url=body.meeting_url)
@@ -238,17 +273,21 @@ async def join_meeting(body: JoinRequest, _: None = Depends(require_api_key)):
 
 
 @app.get("/api/v1/sessions/{session_id}")
-async def get_session(session_id: str, _: None = Depends(require_api_key)):
+async def get_session(session_id: str, auth: dict = Depends(require_auth)):
     s = store.get(session_id)
     if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if s.company_id not in (auth["company_id"], "__system__", "__dev__"):
         raise HTTPException(status_code=404, detail="Session not found")
     return s.to_dict()
 
 
 @app.delete("/api/v1/sessions/{session_id}")
-async def leave_meeting(session_id: str, _: None = Depends(require_api_key)):
+async def leave_meeting(session_id: str, auth: dict = Depends(require_auth)):
     s = store.get(session_id)
     if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if s.company_id not in (auth["company_id"], "__system__", "__dev__"):
         raise HTTPException(status_code=404, detail="Session not found")
     if s.status not in ("JOINED", "CONNECTING"):
         raise HTTPException(status_code=409, detail=f"Session is already {s.status}")
@@ -265,7 +304,7 @@ async def leave_meeting(session_id: str, _: None = Depends(require_api_key)):
 
 
 @app.get("/api/v1/sessions/{session_id}/logs")
-async def stream_logs(session_id: str, request: Request, _: None = Depends(require_api_key)):
+async def stream_logs(session_id: str, request: Request, auth: dict = Depends(require_auth)):
     """Server-Sent Events endpoint — streams log entries in real time."""
     s = store.get(session_id)
     if not s:
