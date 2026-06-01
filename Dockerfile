@@ -30,6 +30,7 @@ COPY --from=builder /install /usr/local
 
 # Copy application source
 COPY src/ ./src/
+COPY tools/ ./tools/
 
 # Logs and data directories (writable by app user)
 RUN mkdir -p logs data && chown -R meetmind:meetmind /app
