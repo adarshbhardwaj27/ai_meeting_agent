@@ -20,7 +20,7 @@ services:
       - "0.0.0.0:8766:8766"      # Recall.ai WebSocket — needs direct public access
     volumes:
       - api_logs:/app/logs
-      - /opt/meetmind/data:/opt/meetmind/data   # SQLite DB persistence
+      - /opt/meetmind/data:/app/data        # SQLite DB persistence
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
