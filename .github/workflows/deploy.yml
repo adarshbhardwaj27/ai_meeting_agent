@@ -48,6 +48,19 @@ jobs:
     environment: production
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync deploy config to VM
+        uses: appleboy/scp-action@v1
+        with:
+          host:     ${{ secrets.ORACLE_VM_HOST }}
+          username: ${{ secrets.ORACLE_VM_USER }}
+          key:      ${{ secrets.ORACLE_VM_SSH_KEY }}
+          source:   "deploy/"
+          target:   "/opt/meetmind/"
+          strip_components: 1
+
       - name: SSH deploy
         uses: appleboy/ssh-action@v1
         with:
@@ -57,6 +70,9 @@ jobs:
           script: |
             set -e
             cd /opt/meetmind
+
+            # Ensure SQLite data directory exists
+            mkdir -p /opt/meetmind/data
 
             # Pull latest image
             docker-compose pull api
