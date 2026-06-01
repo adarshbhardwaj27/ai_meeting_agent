@@ -176,11 +176,7 @@ class TriggerEngine:
                 r"meaning of",
             ]),
             (CommandType.EXIT, [
-                r"(?:please )?(?:leave|exit|stop|quit|go away|get out|goodbye|bye)",
-                r"we(?:'re| are) done(?: with you)?",
-                r"(?:you can )?(?:leave|go) now",
-                r"that(?:'s| is) all(?: for now)?",
-                r"end(?: the)? (?:meeting|session|call)",
+                r"^exit$",
             ]),
         ])
     
@@ -384,8 +380,8 @@ class TriggerEngine:
         'summarize', 'explain', 'help', 'tell', 'show', 'list',
         'find', 'check', 'give', 'describe', 'compare', 'analyze',
         'please',
-        # EXIT intent verbs — so "Alex, leave" or "Alex, go" triggers a VOICE_ADDRESS
-        'leave', 'exit', 'stop', 'quit', 'bye', 'goodbye',
+        # EXIT — only the explicit word 'exit' triggers bot departure
+        'exit',
     })
 
     _DIRECT_ADDRESS_CUE = re.compile(
@@ -616,7 +612,7 @@ class TriggerEngine:
             'summarize', 'explain', 'help', 'tell', 'show', 'list',
             'find', 'check', 'give', 'describe', 'compare', 'analyze',
             'please',
-            'leave', 'exit', 'stop', 'quit', 'bye', 'goodbye',
+            'exit',
         }:
             return True
 
