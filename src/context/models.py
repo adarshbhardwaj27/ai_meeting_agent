@@ -246,6 +246,7 @@ class CommandType(Enum):
     DECISION = "decision"
     ACTION_ITEMS = "action_items"
     CUSTOM = "custom"
+    EXIT = "exit"
 
 
 @dataclass

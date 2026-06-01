@@ -19,7 +19,8 @@ import structlog
 from src.config import config
 from src.context import (
     ContextEngine, TranscriptChunk, MeetingContext,
-    Trigger, TriggerType, ChatMessage
+    Trigger, TriggerType, ChatMessage,
+    CommandType, AIResponse, MessagePriority,
 )
 from src.triggers import TriggerEngine
 from src.reasoning import LLMService
@@ -296,6 +297,20 @@ class MeetingAssistant:
             confidence=trigger.confidence,
             reason=trigger.reason,
         )
+
+        # EXIT command — send farewell and leave the meeting without hitting LLM
+        if trigger.command_type == CommandType.EXIT:
+            logger.info("exit_command_received")
+            farewell = AIResponse.create(
+                text="Sure! Leaving now — thanks for having me! 👋",
+                trigger=trigger,
+                priority=MessagePriority.HIGH,
+            )
+            await self.chat_manager.send(farewell)
+            if self.meeting_logger:
+                self.meeting_logger.event("👋", "EXIT command received — bot leaving")
+            asyncio.ensure_future(self.stop())
+            return
 
         # Observable hook — tests use this to record trigger events
         if self.on_trigger_fired:
